@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "replay": "node scripts/replay.mjs"
   },
   "dependencies": {
     "@jspsych/plugin-html-button-response": "^2.1.0",
