@@ -51,6 +51,10 @@ All parsed in `src/config.ts` and echoed into the session header.
 | ❚❚ 0.5× 1× 2× | time controls |
 | S (debug only) | `swapRealisation` on the selection |
 
+A **controls legend** (top right of the world) lists all of these throughout the sandbox, so participants
+don't have to remember them. The `I` row highlights while isolation is on. It can be collapsed with "hide";
+each toggle is logged as a `legend` event `{open}`.
+
 The inspect panel (bottom left) shows only observable properties: colour, size, speed, number of visible parts.
 Tier names appear only with `debug=1`.
 
@@ -133,6 +137,7 @@ Download: `levels-sandbox-<seed>-<ISO timestamp>.json`. A copy is kept in `local
 | `rule` | diff: `create`, `delete{card}`, `set_about`, `set_when`, `set_then` (each `{from,to}`), `notes{from,to}` |
 | `final_state` | `{notebook, rules, notes}` |
 | `session_end` | `{tick, hash}`, the hash the replay must reproduce |
+| `legend` | `{open}` when the controls legend is hidden/shown |
 | `download` | `{file}` |
 
 ### Determinism and replay

@@ -9,7 +9,7 @@ import { Renderer } from '../render/renderer';
 import { SKINS, hex } from '../render/skins';
 import { hashWorld } from '../sim/hash';
 import { type Action, P } from '../sim/world';
-import { InspectPanel, type InspectInfo, PhaseBanner, TimeControls } from '../ui/controls';
+import { ControlsLegend, InspectPanel, type InspectInfo, PhaseBanner, TimeControls } from '../ui/controls';
 import { h } from '../ui/dom';
 import { NotebookPanel } from '../ui/notebook';
 import { RulesPanel } from '../ui/rules';
@@ -57,7 +57,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   const timeControls = new TimeControls((s) => setSpeed(s));
   const banner = new PhaseBanner(timeControls.el, cfg.debug);
   const shell = h('div', { class: `sandbox skin-${cfg.skin}` }, banner.el, h('div', { class: 'main' }, stage, side));
-  stage.append(inspect.el);
+  const legend = new ControlsLegend(cfg.debug, (open) => session.log('legend', { open }));
+  stage.append(inspect.el, legend.el);
   if (cfg.debug) stage.append(hud);
   root.append(shell);
 
@@ -167,6 +168,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     layout = computeLayout(state, cfg.size);
     renderer.draw(state, layout, { selected, hovered, debug: cfg.debug, size: cfg.size, skin, time: (performance.now() - t0) / 1000 });
     inspect.update(inspectInfo());
+    legend.setIsolated(state.isolated >= 0);
 
     if (phase === 0) {
       const left = cfg.exploreMs - (performance.now() - phaseStart);

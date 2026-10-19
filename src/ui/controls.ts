@@ -65,6 +65,62 @@ export class InspectPanel {
   }
 }
 
+/** Always-visible key/mouse legend so participants don't have to remember the controls. */
+export class ControlsLegend {
+  readonly el = h('div', { class: 'legend', id: 'controls-legend' });
+  private open = true;
+  private isolated = false;
+
+  constructor(
+    private readonly debug: boolean,
+    private readonly onToggle: (open: boolean) => void,
+  ) {
+    this.render();
+  }
+
+  /** highlight the I row while isolation is on */
+  setIsolated(on: boolean): void {
+    if (on === this.isolated) return;
+    this.isolated = on;
+    this.render();
+  }
+
+  private render(): void {
+    const toggle = h('button', {
+      class: 'link legend-toggle',
+      onclick: () => {
+        this.open = !this.open;
+        this.onToggle(this.open);
+        this.render();
+      },
+    }, this.open ? 'hide' : 'show controls');
+    if (!this.open) {
+      this.el.replaceChildren(toggle);
+      return;
+    }
+    const row = (keys: string[], what: string, active = false) =>
+      h('tr', active ? { class: 'active' } : {},
+        h('td', {}, ...keys.flatMap((k, i) => [i ? ' + ' : '', h('kbd', {}, k)])),
+        h('td', {}, what));
+    this.el.replaceChildren(
+      h('div', { class: 'row' }, h('b', { class: 'grow' }, 'Controls'), toggle),
+      h('table', {},
+        row(['Hover'], 'highlight'),
+        row(['Click'], 'select'),
+        row(['Click again'], 'select what it is part of'),
+        row(['Esc'], 'clear selection'),
+        row(['Drag'], 'move the selected thing'),
+        row(['Shift', 'Drag'], 'pull it out of what it is in'),
+        row(['Drop'], 'loose thing joins what it lands on'),
+        row(['I'], this.isolated ? 'unfreeze everything (frozen now)' : 'freeze everything except selection', this.isolated),
+        row(['Scroll'], 'zoom'),
+        row(['Drag background'], 'move around'),
+        ...(this.debug ? [row(['S'], 'swap realisation (debug)')] : []),
+      ),
+    );
+  }
+}
+
 export class PhaseBanner {
   readonly el = h('div', { class: 'banner' });
   private readonly title = h('b', { class: 'phase-title' });
