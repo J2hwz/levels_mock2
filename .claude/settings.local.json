@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Copy-Item \"C:\\\\Users\\\\tisjo\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-tisjo-OneDrive-Documents-GitHub-levels-mock2\\\\46fb0cc0-0e47-4dd1-bb1c-e5fa5cecc857\\\\scratchpad\\\\engine-check.mjs\" scripts/_engine-check.mjs)",
+      "PowerShell(node scripts/_engine-check.mjs \"C:/Users/tisjo/OneDrive/Documents/GitHub/levels_mock2\" 2>&1)"
+    ]
+  }
+}

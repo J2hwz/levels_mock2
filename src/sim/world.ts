@@ -1,6 +1,7 @@
 // Pure, deterministic simulation of the alien-biology sandbox.
 // MUST NOT import Pixi, jsPsych, or touch the DOM. All randomness via ./rng.
 
+import { dcos, dhypot, dsin } from './dmath';
 import { type RngState, gauss, makeRng, rand, randInt, randRange } from './rng';
 
 // ---------------------------------------------------------------- types
@@ -124,6 +125,7 @@ export const P = {
   targetCells: 175,
   maxCells: 200,
   minFreeCells: 15,
+  maxFreeCells: 70,
   // same-tier interactions: [T0, T1, T2]
   rmin: [11, 58, 220],
   rmax: [45, 220, 800],
@@ -150,11 +152,13 @@ export const P = {
   // misc
   freeNoise: 30,
   flatNoise: 60,
-  flatUniform: 0.15,
+  // flat: uniform matrix value. Any attraction > 0 makes clumps that persist; 0 keeps groupings transient.
+  flatUniform: 0,
   wallK: 20,
   joinMargin: 25,
   nRegions: 6,
   regionR: 230,
+  regionCrowdThr: 1.5,
 };
 
 // ---------------------------------------------------------------- geometry helpers
@@ -177,7 +181,7 @@ export function naturalRadius(s: WorldState, e: Entity): number {
 export function slotPos(parent: Entity, k: number, n: number): [number, number] {
   const R = ringRadius(parent.tier, n);
   const a = parent.angle + (2 * Math.PI * k) / n;
-  return [parent.x + R * Math.cos(a), parent.y + R * Math.sin(a)];
+  return [parent.x + R * dcos(a), parent.y + R * dsin(a)];
 }
 
 export function descendants(s: WorldState, id: number, out: number[] = []): number[] {
@@ -322,7 +326,7 @@ function placeAwayFrom(r: RngState, pts: [number, number][], minD: number, margi
     const x = randRange(r, margin, P.worldW - margin);
     const y = randRange(r, margin, P.worldH - margin);
     let d = Infinity;
-    for (const [px, py] of pts) d = Math.min(d, Math.hypot(px - x, py - y));
+    for (const [px, py] of pts) d = Math.min(d, dhypot(px - x, py - y));
     if (d >= minD) return [x, y];
     if (d > bestD) {
       bestD = d;
@@ -355,7 +359,7 @@ export function createWorld(config: SimConfig): WorldState {
     if (countCells() + s.grammar.species[sp][0].length > P.maxCells - P.minFreeCells) continue;
     buildOrganism(s, sp, 0, x, y, rand(rng) * Math.PI * 2);
   }
-  const nFree = Math.max(P.minFreeCells, Math.min(45, P.targetCells - countCells()));
+  const nFree = Math.max(P.minFreeCells, Math.min(P.maxFreeCells, P.targetCells - countCells()));
   for (let i = 0; i < nFree; i++) {
     newEntity(s, 0, randInt(rng, 0, P.nCellTypes - 1), randRange(rng, 40, P.worldW - 40), randRange(rng, 40, P.worldH - 40));
   }
@@ -424,7 +428,7 @@ function dissolveOrganism(s: WorldState, o: Entity, events: SimEvent[]): void {
     ce.signal = 0;
     const dx = ce.x - o.x;
     const dy = ce.y - o.y;
-    const d = Math.hypot(dx, dy) || 1;
+    const d = dhypot(dx, dy) || 1;
     ce.vx += (dx / d) * 40;
     ce.vy += (dy / d) * 40;
   }
@@ -460,7 +464,7 @@ export function findJoinTarget(s: WorldState, id: number): number {
   let bestD = Infinity;
   for (const p of s.entities) {
     if (!p.alive || p.tier !== c.tier + 1 || !canJoin(s, id, p.id)) continue;
-    const d = Math.hypot(p.x - c.x, p.y - c.y);
+    const d = dhypot(p.x - c.x, p.y - c.y);
     if (d < naturalRadius(s, p) + P.joinMargin && d < bestD) {
       best = p.id;
       bestD = d;
@@ -649,14 +653,14 @@ function advance(s: WorldState, events: SimEvent[]): void {
         h.density += (1 - h.density) * P.densityRate;
         continue;
       }
-      const expected = 2 * ringRadius(2, m) * Math.sin(Math.PI / m);
+      const expected = 2 * ringRadius(2, m) * dsin(Math.PI / m);
       let sumNN = 0;
       for (const oid of h.children) {
         const o = ents[oid];
         let nn = Infinity;
         for (const q of orgs) {
           if (q === o) continue;
-          nn = Math.min(nn, Math.hypot(q.x - o.x, q.y - o.y));
+          nn = Math.min(nn, dhypot(q.x - o.x, q.y - o.y));
         }
         sumNN += Math.min(nn, expected * 3);
       }
@@ -673,7 +677,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
       o.signal = Math.max(0, h.density + gauss(s.rng) * P.densityNoise);
       const dx = o.x - h.x;
       const dy = o.y - h.y;
-      const d = Math.hypot(dx, dy) || 1;
+      const d = dhypot(dx, dy) || 1;
       const f = P.densityGain * (o.signal - 1);
       fx[o.id] += (f * dx) / d;
       fy[o.id] += (f * dy) / d;
@@ -699,8 +703,8 @@ function advance(s: WorldState, events: SimEvent[]): void {
     if (!on(e)) continue;
     if (e.parent < 0 && e.tier > 0) {
       const c = e.tier === 1 ? s.laws.cruise1[e.type] : s.laws.cruise2[e.type];
-      fx[e.id] += c * Math.cos(e.angle);
-      fy[e.id] += c * Math.sin(e.angle);
+      fx[e.id] += c * dcos(e.angle);
+      fy[e.id] += c * dsin(e.angle);
     }
     if (e.tier === 0 && e.parent < 0) {
       const nz = hier ? P.freeNoise : P.flatNoise;
@@ -727,7 +731,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
     }
     e.vx = e.vx * P.damping + fx[e.id] * P.dt;
     e.vy = e.vy * P.damping + fy[e.id] * P.dt;
-    const sp = Math.hypot(e.vx, e.vy);
+    const sp = dhypot(e.vx, e.vy);
     if (sp > P.maxSpeed) {
       e.vx *= P.maxSpeed / sp;
       e.vy *= P.maxSpeed / sp;
@@ -748,18 +752,14 @@ function advance(s: WorldState, events: SimEvent[]): void {
       if (o.health <= 0) dissolveOrganism(s, o, events);
     }
   } else {
+    // region "stress" = crowding: cells inside relative to the count expected from uniform spread
+    const expected = Math.max(1, (byTier[0].length * Math.PI * P.regionR * P.regionR) / (P.worldW * P.worldH));
     s.regions.forEach((r, i) => {
-      let sum = 0;
       let cnt = 0;
-      for (const c of byTier[0]) {
-        if (Math.hypot(c.x - r.x, c.y - r.y) < r.r) {
-          sum += c.stress;
-          cnt++;
-        }
-      }
-      r.stress += ((cnt ? sum / cnt : 0) - r.stress) * P.hormoneRate;
+      for (const c of byTier[0]) if (dhypot(c.x - r.x, c.y - r.y) < r.r) cnt++;
+      r.stress += (cnt / expected - r.stress) * P.hormoneRate;
       const before = r.health;
-      const ex = r.stress - P.hormoneThr;
+      const ex = r.stress - P.regionCrowdThr;
       r.health = ex > 0 ? r.health - P.healthDecay * ex * P.dt : r.health + P.healthRecover * P.dt;
       r.health = Math.min(1, Math.max(0, r.health));
       if (before > 0 && r.health <= 0) events.push({ kind: 'region_depleted', index: i });
@@ -771,7 +771,8 @@ function advance(s: WorldState, events: SimEvent[]): void {
 
 /** Deep copy as plain JSON (used for snapshots). */
 export function snapshotWorld(s: WorldState): unknown {
-  return {
+  // deep copy: the log must not hold live references that keep changing
+  return JSON.parse(JSON.stringify({
     tick: s.tick,
     rng: s.rng.s,
     nextId: s.nextId,
@@ -779,5 +780,5 @@ export function snapshotWorld(s: WorldState): unknown {
     drag: s.drag,
     regions: s.regions,
     entities: s.entities.filter((e) => e.alive),
-  };
+  }));
 }

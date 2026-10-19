@@ -9,7 +9,7 @@ import type { SizeMode } from '../config';
 import { hash01 } from '../sim/rng';
 import { type Entity, type WorldState, naturalRadius } from '../sim/world';
 
-export const IRRELEVANT_RANGE: readonly [number, number] = [8, 70];
+export const IRRELEVANT_RANGE: readonly [number, number] = [6, 56];
 
 export interface DisplayNode {
   id: number;

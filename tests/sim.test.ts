@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { simConfigOf } from '../src/config';
 import { replay } from '../src/replay';
@@ -60,6 +62,18 @@ describe('replay', () => {
     },
   );
 
+  // Recorded in Chromium by `npm run screenshots` (real pointer input, real frame timing).
+  // If the sim changes, old logs stop replaying: re-run the script to refresh the fixture.
+  const fixture = join(__dirname, 'fixtures', 'browser-session.json');
+  it.skipIf(!existsSync(fixture))('replays the log recorded in a real browser run-through', () => {
+    const log = JSON.parse(readFileSync(fixture, 'utf8'));
+    const kinds = new Set(log.events.filter((e: { type: string }) => e.type === 'action').map((e: { payload: { kind: string } }) => e.payload.kind));
+    expect([...kinds]).toEqual(expect.arrayContaining(['select', 'dragStart', 'dragMove', 'dragEnd', 'detach', 'join', 'isolate', 'speed']));
+    const res = replay(log);
+    expect(res.mismatches).toEqual([]);
+    expect(res.actualHash).toBe(res.expectedHash);
+  });
+
   it('detects a tampered log', () => {
     const session = testSession('?seed=42');
     const script = scriptedActions(session);
@@ -75,8 +89,20 @@ describe('replay', () => {
   });
 });
 
+describe('deterministic math', () => {
+  it('dsin/dcos/dhypot match Math to ~1e-13', async () => {
+    const { dcos, dhypot, dsin } = await import('../src/sim/dmath');
+    for (let i = -2000; i < 2000; i++) {
+      const x = i * 0.0731;
+      expect(Math.abs(dsin(x) - Math.sin(x))).toBeLessThan(1e-13);
+      expect(Math.abs(dcos(x) - Math.cos(x))).toBeLessThan(1e-13);
+      expect(Math.abs(dhypot(x, 3) - Math.hypot(x, 3))).toBeLessThan(1e-12);
+    }
+  });
+});
+
 describe('conditions', () => {
-  it.each([1, 42, 1234, 99999])('hier and flat have the same cells (seed %i)', (seed) => {
+  it.each([...Array.from({ length: 30 }, (_, i) => i + 1), 1234, 99999])('hier and flat have the same cells (seed %i)', (seed) => {
     const h = createWorld({ hier: true, eps: 0.05, seed });
     const f = createWorld({ hier: false, eps: 0.05, seed });
     const cells = (s: typeof h) => s.entities.filter((e) => e.tier === 0).map((e) => e.type).sort();

@@ -27,6 +27,14 @@ describe('architecture', () => {
     }
   });
 
+  // These are not required to be correctly rounded, so engines differ in the last bit
+  // and a browser log would not replay in Node. Use sim/dmath.ts instead.
+  it.each(files)('sim/%s uses only cross-engine deterministic math', (f) => {
+    const code = readFileSync(join(SIM_DIR, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    expect(code).not.toMatch(/Math\.(sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|exp|expm1|log|log1p|log2|log10|pow|cbrt|hypot)\b/);
+    expect(code).not.toMatch(/\*\*/);
+  });
+
   it.each(files)('sim/%s does not touch the DOM or wall-clock randomness', (f) => {
     const src = readFileSync(join(SIM_DIR, f), 'utf8');
     expect(src).not.toMatch(/\b(window|document|performance|Date\.now|Math\.random)\b/);
