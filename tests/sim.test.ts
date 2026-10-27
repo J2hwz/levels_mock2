@@ -108,8 +108,8 @@ describe('conditions', () => {
     const cells = (s: typeof h) => s.entities.filter((e) => e.tier === 0).map((e) => e.type).sort();
     expect(cells(f)).toEqual(cells(h));
     // P.freeCells loose cells, plus at most P.maxComposedCells inside organisms
-    expect(h.entities.filter((e) => e.tier === 0 && e.parent < 0).length).toBe(120);
-    expect(h.entities.filter((e) => e.tier === 0 && e.parent >= 0).length).toBeLessThanOrEqual(185);
+    expect(h.entities.filter((e) => e.tier === 0 && e.parent < 0).length).toBe(P.freeCells);
+    expect(h.entities.filter((e) => e.tier === 0 && e.parent >= 0).length).toBeLessThanOrEqual(P.maxComposedCells);
     expect(f.entities.every((e) => e.tier === 0 && e.parent < 0)).toBe(true);
     expect(h.entities.filter((e) => e.tier === 2).length).toBe(5);
   });
@@ -336,9 +336,12 @@ function dynWorld(dyn: Partial<Dynamics>, opts: { seed?: number; hier?: boolean;
 const lvl = (t: number) => [0, 1, 2].map((i) => i === t);
 /** a point with nothing alive within `clear` units */
 function emptySpot(s: WorldState, clear = 120): [number, number] {
-  for (let y = 150; y < 1500; y += 25) {
-    for (let x = 150; x < 2300; x += 25) {
-      if (s.entities.every((e) => !e.alive || Math.hypot(e.x - x, e.y - y) > clear)) return [x, y];
+  // the world is crowded: settle for less room if needed (never below 100 units)
+  for (let c = clear; c >= 100; c -= 10) {
+    for (let y = 150; y < 1500; y += 25) {
+      for (let x = 150; x < 2300; x += 25) {
+        if (s.entities.every((e) => !e.alive || Math.hypot(e.x - x, e.y - y) > c)) return [x, y];
+      }
     }
   }
   throw new Error('no empty spot');
@@ -521,7 +524,7 @@ describe('catalysis (organisms only)', () => {
     const a0 = target.angle;
     ticks(s, 30);
     expect(target.spin).toBeCloseTo(DYNAMICS.catSpin, 6);
-    expect(target.angle - a0).toBeGreaterThan(3.5); // ~4.2 rad in 1 s
+    expect(target.angle - a0).toBeGreaterThan(DYNAMICS.catSpin - 0.5); // ~catSpin rad in 1 s
     expect(cat.spin).toBe(0); // one-way
     place(s, cat.id, cat.x + 400, cat.y);
     ticks(s, 15);

@@ -232,8 +232,9 @@ for (const hier of [1, 0]) {
     const s = sb.state;
     const herd = s.entities.find((e) => e.alive && e.tier === 2);
     const org = s.entities[herd.children[0]];
-    sb.camera.x = herd.x;
-    sb.camera.y = herd.y;
+    // centre on the organism (not the herd), so the controls legend never covers it
+    sb.camera.x = org.x;
+    sb.camera.y = org.y;
     sb.camera.zoom = 2.2;
     return { herd: herd.id, org: org.id, cell: org.children[0], cell2: org.children[1] };
   });

@@ -68,11 +68,11 @@ export const DYNAMICS = {
   lockRepel: 100,
   /** "touching" for catalysis: closer than rA + rB + catMargin */
   catMargin: 12,
-  /** catalysed spin, rad/s (~1 turn per 1.5 s) */
-  catSpin: 4.2,
-  /** without contact the spin decays by this factor per tick (4.2 -> 0.3 rad/s in ~2.2 s) ... */
+  /** catalysed spin, rad/s (~1 turn per 2 s) */
+  catSpin: 3.0,
+  /** without contact the spin decays by this factor per tick (3.0 -> 0.3 rad/s in ~1.9 s) ... */
   catDecay: 0.96,
-  /** ... and stops below this (~2.5 s after contact ends) */
+  /** ... and stops below this (~2 s after contact ends) */
   catStop: 0.2,
   /** gap between the two organisms of a catalyst-target pair placed together in a herd */
   pairGap: 6,
@@ -198,11 +198,11 @@ export const P = {
   nSpecies: 3,
   nHerdKinds: 2,
   nHerds: 5,
-  nLoneOrganisms: 6,
+  nLoneOrganisms: 18,
   /** cap on cells inside organisms (generated herds + lone organisms) */
-  maxComposedCells: 185,
+  maxComposedCells: 380,
   /** loose cells floating around at the start (SimConfig.free overrides) */
-  freeCells: 120,
+  freeCells: 140,
   // same-tier interactions: [T0, T1, T2]
   rmin: [11, 58, 220],
   rmax: [45, 220, 800],
@@ -425,8 +425,8 @@ function makeGrammar(r: RngState, c: SimConfig): Grammar {
   }
   const herds: number[][][] = [];
   for (let k = 0; k < P.nHerdKinds; k++) {
-    // the generated realisation is capped one below max so 5 herds stay within the cell budget
-    const r0 = recipe(r, randInt(r, hmin, Math.max(hmin, hunst - 2)), k, P.nSpecies);
+    // the generated realisation has more than the minimum where the band allows (4-6 organisms by default)
+    const r0 = recipe(r, randInt(r, Math.min(hmin + 1, hunst - 1), hunst - 1), k, P.nSpecies);
     const r1 = recipe(r, randInt(r, Math.min(hmin + 1, hunst - 1), hunst - 1), (k + 2) % P.nSpecies, P.nSpecies);
     herds.push([r0, r1]);
   }

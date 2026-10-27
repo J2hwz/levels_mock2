@@ -53,7 +53,7 @@ export const DEFAULTS = {
   catalysis: true,
   org: [5, 8] as [number, number],
   herd: [3, 7] as [number, number],
-  free: 120,
+  free: 140,
   exploreMs: 6 * 60 * 1000,
   shortExploreMs: 60 * 1000,
 };
