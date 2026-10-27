@@ -32,7 +32,8 @@ Quick test link: `http://localhost:5173/?seed=42&short=1&debug=1`
 | `seed`  | integer                   | random     | world seed (the random default is logged in the header) |
 | `eps`   | 0..1                      | `0.05`     | cross-unit leakage |
 | `move`  | `1` \| `0`                | `1`        | `1`: things drift (self-propulsion, laws, noise). `0`: still world, nothing moves unless dragged |
-| `laws`  | `1` \| `0`                | `1`        | `0`: no laws. The interaction matrices, swimming and turning are zeroed, and every free-standing cell, organism and herd random-walks. Contact, springs, downward causation and `lock`/`catalysis`/`similar` still apply. The starting world is identical to `laws=1` for the same seed |
+| `laws`  | `1` \| `0`                | `1`        | `0`: no laws. The interaction matrices, swimming and turning are zeroed. Every free-standing cell, organism and herd does a persistent random walk instead: it heads in a random direction that drifts (~3 s persistence) and bounces off walls, the same for every type. Contact, springs, downward causation and `lock`/`catalysis`/`similar` still apply. The starting world is identical to `laws=1` for the same seed |
+| `wander`| 0..5                      | `1`        | `laws=0` only: strength of the random walk. `0` = jiggle on the spot. At `1`, organisms from different units meet ~13 times per 2 min (laws on: ~17) |
 | `reveal`| `1` \| `0`                | `1`        | `1`: organisms and herds show only their colour until hovered. `0`: contents always visible |
 | `lock`  | levels, e.g. `0,1` \| `all` | none      | lock & key at these levels (`0` cells, `1` membranes/organisms, `2` hazes/herds) |
 | `catalysis` | levels                | none       | catalysis at these levels |

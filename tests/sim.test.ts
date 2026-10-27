@@ -276,7 +276,8 @@ describe('laws=0', () => {
   const world = (laws: boolean) => createWorld({ hier: true, eps: 0.05, seed: 42, laws });
 
   it('generates exactly the same starting world as laws=1', () => {
-    expect(hashWorld(world(false))).toBe(hashWorld(world(true)));
+    // (hashes differ by design: laws=0 also hashes the random-walk heading)
+    expect(world(false).entities).toEqual(world(true).entities);
   });
 
   it('zeroes every matrix, swimming speed and turning rate', () => {
@@ -294,6 +295,17 @@ describe('laws=0', () => {
     };
     expect(run(false, true)).toEqual(run(false, false));
     expect(run(true, true)).not.toEqual(run(true, false)); // with laws, type matters
+  });
+
+  it('the random walk roams far further than plain jiggle (wander=0)', () => {
+    const travel = (wander: number) => {
+      const s = createWorld({ hier: true, eps: 0.05, seed: 42, laws: false, wander });
+      const start = s.entities.map((e) => [e.x, e.y]);
+      for (let i = 0; i < 900; i++) step(s, []);
+      const free = s.entities.filter((e) => e.alive && e.tier === 1 && e.parent < 0);
+      return free.reduce((a, e) => a + Math.hypot(e.x - start[e.id][0], e.y - start[e.id][1]), 0) / free.length;
+    };
+    expect(travel(1)).toBeGreaterThan(5 * travel(0));
   });
 
   it('free organisms and herds random-walk instead of swimming and turning', () => {

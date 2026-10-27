@@ -2,7 +2,7 @@
 // MUST NOT import Pixi, jsPsych, or touch the DOM. All randomness via ./rng.
 
 import { dcos, dhypot, dsin } from './dmath';
-import { type RngState, gauss, makeRng, rand, randInt, randRange } from './rng';
+import { type RngState, gauss, hash01, makeRng, rand, randInt, randRange } from './rng';
 
 // ---------------------------------------------------------------- types
 
@@ -20,6 +20,8 @@ export interface SimConfig {
    * Missing = true.
    */
   laws?: boolean;
+  /** laws=0 only: strength multiplier of the persistent random walk. Missing = 1. */
+  wander?: number;
   /** same-level dynamics switched on per tier. Missing = all off. */
   dyn?: Dynamics;
   /** size bands [min, unstable) for organisms / herds. Missing = DEFAULT_ORG / DEFAULT_HERD. */
@@ -93,6 +95,8 @@ export interface Entity {
   density: number;
   /** T1/T2: which recipe realises this species / herd kind */
   realisation: number;
+  /** laws=0 only: direction of the persistent random walk (separate from `angle`, which catalysis turns) */
+  heading: number;
 }
 
 export interface Grammar {
@@ -204,6 +208,12 @@ export const P = {
   // misc
   freeNoise: 30,
   flatNoise: 60,
+  // laws=0: persistent random walk of free-standing things, per tier [cells, organisms, herds].
+  // Force along `heading` (top speed ~ force/3 u/s); heading turns by gauss * wanderTurn per tick
+  // (direction persists for ~3 s). Same for every type, so it is random, not a law.
+  // organisms and herds are set so they meet about as often as with laws on (probe: ~13 vs ~17 meetings / 2 min)
+  wander: [30, 90, 90],
+  wanderTurn: 0.15,
   // flat: uniform matrix value. Any attraction > 0 makes clumps that persist; 0 keeps groupings transient.
   flatUniform: 0,
   wallK: 20,
@@ -362,7 +372,10 @@ function newEntity(s: WorldState, tier: Tier, type: number, x: number, y: number
     bond: -1,
     density: tier === 2 ? 1 : 0,
     realisation: 0,
+    heading: 0,
   };
+  // stateless hash, so generation consumes no extra rng draws and laws=1 worlds are unchanged
+  e.heading = hash01(s.config.seed, e.id) * 2 * Math.PI;
   s.entities.push(e);
   return e;
 }
@@ -986,12 +999,25 @@ function advance(s: WorldState, events: SimEvent[]): void {
       fx[e.id] += gauss(s.rng) * nz;
       fy[e.id] += gauss(s.rng) * nz;
     }
+    const wanders = drift && e.parent < 0 && s.config.laws === false;
+    if (wanders) {
+      // persistent random walk: keep going roughly the same way, drifting direction at random
+      e.heading += gauss(s.rng) * P.wanderTurn;
+      const w = P.wander[e.tier] * (s.config.wander ?? 1);
+      fx[e.id] += w * dcos(e.heading);
+      fy[e.id] += w * dsin(e.heading);
+    }
     if (e.parent < 0) {
       const R = naturalRadius(s, e);
       if (e.x < R) fx[e.id] += P.wallK * (R - e.x);
       if (e.x > P.worldW - R) fx[e.id] -= P.wallK * (e.x - (P.worldW - R));
       if (e.y < R) fy[e.id] += P.wallK * (R - e.y);
       if (e.y > P.worldH - R) fy[e.id] -= P.wallK * (e.y - (P.worldH - R));
+      if (wanders) {
+        // bounce the walk off the walls instead of pressing into them
+        if ((e.x < R && dcos(e.heading) < 0) || (e.x > P.worldW - R && dcos(e.heading) > 0)) e.heading = Math.PI - e.heading;
+        if ((e.y < R && dsin(e.heading) < 0) || (e.y > P.worldH - R && dsin(e.heading) > 0)) e.heading = -e.heading;
+      }
     }
   }
 

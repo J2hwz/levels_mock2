@@ -51,6 +51,8 @@ export function hashWorld(s: WorldState): string {
     h.num(e.density);
     h.num(e.realisation);
     h.num(e.bond);
+    // only hashed where it is used, so logs recorded before it existed (laws=1) still replay
+    if (s.config.laws === false) h.num(e.heading);
   }
   for (const r of s.regions) {
     h.num(r.health);

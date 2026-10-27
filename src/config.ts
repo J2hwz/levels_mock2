@@ -1,5 +1,5 @@
 // All experiment dials + URL-param parsing.
-// ?hier=1|0&size=proxy|irrelevant&skin=biology|abstract&seed=42&eps=0.05&move=1|0&laws=1|0&reveal=1|0
+// ?hier=1|0&size=proxy|irrelevant&skin=biology|abstract&seed=42&eps=0.05&move=1|0&laws=1|0&wander=1&reveal=1|0
 //  &lock=0,1,2|all&catalysis=...&similar=...&org=5-8&herd=3-7&free=120&short=1&debug=1
 
 import type { Dynamics, SimConfig } from './sim/world';
@@ -17,6 +17,8 @@ export interface Config {
   move: boolean;
   /** seed-drawn laws (interaction matrices, swimming, turning); off = every free-standing thing just random-walks */
   laws: boolean;
+  /** laws=0 only: strength multiplier of the persistent random walk (0 = just jiggle) */
+  wander: number;
   /** composites show only their colour; their contents appear while hovered */
   reveal: boolean;
   /** same-level dynamics, per level [cells, organisms, herds] */
@@ -43,6 +45,7 @@ export const DEFAULTS = {
   eps: 0.05,
   move: true,
   laws: true,
+  wander: 1,
   reveal: true,
   org: [5, 8] as [number, number],
   herd: [3, 7] as [number, number],
@@ -94,6 +97,7 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
     eps: q.get('eps') !== null && Number.isFinite(epsNum) ? Math.min(1, Math.max(0, epsNum)) : DEFAULTS.eps,
     move: bool(q.get('move'), DEFAULTS.move),
     laws: bool(q.get('laws'), DEFAULTS.laws),
+    wander: q.get('wander') !== null && Number.isFinite(Number(q.get('wander'))) ? Math.min(5, Math.max(0, Number(q.get('wander')))) : DEFAULTS.wander,
     reveal: bool(q.get('reveal'), DEFAULTS.reveal),
     lock: levels(q.get('lock')),
     catalysis: levels(q.get('catalysis')),
@@ -110,5 +114,5 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
 
 export function simConfigOf(c: Pick<Config, 'hier' | 'eps' | 'seed'> & Partial<Config>): SimConfig {
   const dyn: Dynamics = { lock: c.lock ?? [false, false, false], catalysis: c.catalysis ?? [false, false, false], similar: c.similar ?? [false, false, false] };
-  return { hier: c.hier, eps: c.eps, seed: c.seed, move: c.move ?? true, laws: c.laws ?? true, dyn, org: c.org ?? DEFAULTS.org, herd: c.herd ?? DEFAULTS.herd, free: c.free ?? DEFAULTS.free };
+  return { hier: c.hier, eps: c.eps, seed: c.seed, move: c.move ?? true, laws: c.laws ?? true, wander: c.wander ?? DEFAULTS.wander, dyn, org: c.org ?? DEFAULTS.org, herd: c.herd ?? DEFAULTS.herd, free: c.free ?? DEFAULTS.free };
 }
