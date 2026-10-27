@@ -1,13 +1,14 @@
 // Pointer / keyboard -> Action translation.
 //   hover: highlight; click: select deepest; click again on the same spot: select parent
 //   drag selected (or a part of it): move it with all its parts (and its bond partner);
-//   Shift-drag: detach from its parent and bond partner first
-//   drop a free entity near a compatible parent: join; else onto a free peer of the same tier: combine
-//   into a new parent one tier up; drag background: pan; wheel: zoom
-//   Esc: clear selection; I: isolate toggle; S (debug only): swap realisation
+//   Shift-drag: detach first (a member leaves its parent with its partner; a free one leaves its partner)
+//   dropping never builds anything: things just meet (so lock & key / catalysis can be seen).
+//   C while dragging: join the compatible parent it touches, else combine it with every loose same-level
+//   thing touching it into a new parent; then keep dragging that whole. drag background: pan; wheel: zoom
+//   Esc: clear selection; I: isolate toggle; S (debug only): swap realisation; C: see above
 
 import type { Action, WorldState } from '../sim/world';
-import { findCombineTarget, findJoinTarget } from '../sim/world';
+import { canCombine, findCombineGroup, findJoinTarget } from '../sim/world';
 import type { Camera } from './camera';
 import { type Layout, displayToSim, hitChain } from './layout';
 
@@ -20,6 +21,8 @@ export interface InputHost {
   act(a: Action): void;
   select(id: number | null): void;
   setHover(id: number): void;
+  /** C found nothing to join or combine with */
+  refused(id: number): void;
 }
 
 const CLICK_SLOP_PX = 4;
@@ -29,6 +32,9 @@ export class InputController {
   private down: {
     sx: number;
     sy: number;
+    /** latest pointer position (screen) */
+    lx: number;
+    ly: number;
     chain: number[];
     shift: boolean;
     mode: 'none' | 'drag' | 'pan';
@@ -83,12 +89,16 @@ export class InputController {
     if (e.button !== 0) return;
     this.canvas.setPointerCapture(e.pointerId);
     const [sx, sy] = this.local(e);
-    this.down = { sx, sy, chain: this.chainAt(sx, sy), shift: e.shiftKey, mode: 'none', dragId: -1, offX: 0, offY: 0 };
+    this.down = { sx, sy, lx: sx, ly: sy, chain: this.chainAt(sx, sy), shift: e.shiftKey, mode: 'none', dragId: -1, offX: 0, offY: 0 };
   }
 
   private onMove(e: PointerEvent): void {
     const [sx, sy] = this.local(e);
     const d = this.down;
+    if (d) {
+      d.lx = sx;
+      d.ly = sy;
+    }
     if (!d) {
       const chain = this.chainAt(sx, sy);
       this.host.setHover(chain.length ? chain[0] : -1);
@@ -138,14 +148,37 @@ export class InputController {
     } else if (d.mode === 'drag') {
       this.flush();
       this.host.act({ kind: 'dragEnd', id: d.dragId });
-      const target = findJoinTarget(this.host.state, d.dragId);
-      if (target >= 0) {
-        this.host.act({ kind: 'join', id: d.dragId, parent: target });
-      } else {
-        const peer = findCombineTarget(this.host.state, d.dragId);
-        if (peer >= 0) this.host.act({ kind: 'combine', ids: [peer, d.dragId] });
-      }
     }
+  }
+
+  /** C while dragging: build, then keep dragging the whole the dragged thing is now part of. */
+  private combineNow(): void {
+    const d = this.down!;
+    const s = this.host.state;
+    const id = d.dragId;
+    this.flush();
+    const target = findJoinTarget(s, id);
+    if (target >= 0) {
+      this.host.act({ kind: 'join', id, parent: target });
+    } else {
+      const group = findCombineGroup(s, id);
+      if (canCombine(s, group)) this.host.act({ kind: 'combine', ids: group });
+    }
+    const p = s.entities[id].parent;
+    if (p < 0) {
+      this.host.refused(id);
+      return;
+    }
+    this.host.act({ kind: 'dragEnd', id });
+    this.host.select(p);
+    const [wx, wy] = this.host.camera.screenToWorld(d.lx, d.ly);
+    // a whole that was just founded is not laid out yet; free-standing things are drawn at their sim position
+    const n = this.host.layout()[p];
+    d.dragId = p;
+    d.offX = (n && s.entities[p].parent >= 0 ? n.x : s.entities[p].x) - wx;
+    d.offY = (n && s.entities[p].parent >= 0 ? n.y : s.entities[p].y) - wy;
+    const [tx, ty] = this.dragTarget(d.lx, d.ly);
+    this.host.act({ kind: 'dragStart', id: p, x: tx, y: ty });
   }
 
   private click(chain: number[]): void {
@@ -168,6 +201,10 @@ export class InputController {
   private onKey(e: KeyboardEvent): void {
     const tag = (e.target as HTMLElement | null)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if ((e.key === 'c' || e.key === 'C') && !e.repeat && this.down?.mode === 'drag') {
+      this.combineNow();
+      return;
+    }
     const sel = this.host.selected();
     if (e.key === 'Escape') {
       this.host.select(null);

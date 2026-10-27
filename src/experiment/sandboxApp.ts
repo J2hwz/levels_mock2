@@ -57,7 +57,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   const timeControls = new TimeControls((s) => setSpeed(s));
   const banner = new PhaseBanner(timeControls.el, cfg.debug);
   const shell = h('div', { class: `sandbox skin-${cfg.skin}` }, banner.el, h('div', { class: 'main' }, stage, side));
-  const legend = new ControlsLegend(cfg.debug, cfg.reveal, cfg.lock.some(Boolean), (open) => session.log('legend', { open }));
+  const legend = new ControlsLegend(cfg.debug, cfg.reveal, cfg.lock, (open) => session.log('legend', { open }));
   stage.append(inspect.el, legend.el);
   if (cfg.debug) stage.append(hud);
   root.append(shell);
@@ -83,6 +83,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     act({ kind: 'speed', speed: s });
   };
 
+  // a brief red ring when C finds nothing it can combine
+  let flash = { id: -1, until: 0 };
   const input = new InputController(renderer.canvas, {
     state,
     camera: renderer.camera,
@@ -91,6 +93,10 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     selected: () => selected,
     act,
     select,
+    refused: (id) => {
+      session.log('combine_refused', { id });
+      flash = { id, until: performance.now() + 600 };
+    },
     setHover: (id) => {
       if (id === hovered) return;
       hovered = id;
@@ -166,7 +172,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     if (hovered >= 0 && !state.entities[hovered]?.alive) hovered = -1;
 
     layout = computeLayout(state, cfg.size);
-    renderer.draw(state, layout, { selected, hovered, debug: cfg.debug, size: cfg.size, reveal: cfg.reveal, skin, time: (performance.now() - t0) / 1000 });
+    renderer.draw(state, layout, { selected, hovered, debug: cfg.debug, size: cfg.size, reveal: cfg.reveal, skin, time: (performance.now() - t0) / 1000, flash: performance.now() < flash.until ? flash.id : -1 });
     inspect.update(inspectInfo());
     legend.setIsolated(state.isolated >= 0);
 

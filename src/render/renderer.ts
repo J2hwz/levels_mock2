@@ -2,7 +2,7 @@
 
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import type { SizeMode } from '../config';
-import { type Entity, P, type WorldState, descendants } from '../sim/world';
+import { type Entity, P, type WorldState, catalysisOn, descendants } from '../sim/world';
 import { Camera } from './camera';
 import { type Layout, openRoots } from './layout';
 import { type Glyph, type SkinDef, lerpColor } from './skins';
@@ -17,6 +17,8 @@ export interface ViewState {
   skin: SkinDef;
   /** render-only clock in seconds, for cosmetic wobble */
   time: number;
+  /** entity to ring in red (C found nothing to combine with), or -1 */
+  flash: number;
 }
 
 export class Renderer {
@@ -101,8 +103,8 @@ export class Renderer {
       if (!a || !b) continue;
       this.gRegion.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2 * px, color: sk.ui, alpha: 0.5 * dim(e) });
     }
-    // catalysis turns things: show their orientation at the levels where it is on
-    const spinMark = (t: number) => s.config.dyn?.catalysis[t] === true;
+    // catalysis turns organisms: show their orientation when it is on
+    const spinMark = (t: number) => catalysisOn(s.config, t);
 
     for (const e of s.entities) {
       if (!e.alive) continue;
@@ -119,7 +121,6 @@ export class Renderer {
         } else {
           this.gHerd.circle(n.x, n.y, n.r).stroke({ width: 1.5 * px, color: col, alpha: sk.herdStroke * a });
         }
-        if (spinMark(2)) rimMark(this.gHerd, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.08, 3 * px), col, a);
         if (e.health < 1) this.healthBar(this.gHerd, n.x, n.y - n.r - 6 * px, Math.max(n.r * 0.6, 20 * px), e.health, sk, a);
       } else if (e.tier === 1) {
         const col = sk.species[e.type];
@@ -143,10 +144,6 @@ export class Renderer {
           glyph(this.gCell, sk.glyph[e.type], n.x, n.y, r, e.angle);
           this.gCell.fill({ color: col, alpha: a });
         }
-        if (spinMark(0)) {
-          // off-centre dot so even round cells show that they turn
-          this.gCell.circle(n.x + r * 0.78 * Math.cos(e.angle), n.y + r * 0.78 * Math.sin(e.angle), r * 0.2).fill({ color: sk.ui, alpha: 0.8 * a });
-        }
       }
     }
 
@@ -159,6 +156,10 @@ export class Renderer {
     if (v.hovered !== v.selected) ring(v.hovered, 0.45, 1.5);
     ring(v.selected, 0.95, 2.5);
     if (s.isolated >= 0) ring(s.isolated, 0.5, 6);
+    if (v.flash >= 0 && s.entities[v.flash]?.alive) {
+      const n = layout[v.flash];
+      if (n) this.gOver.circle(n.x, n.y, n.r + 5 * px).stroke({ width: 3 * px, color: sk.stress, alpha: 0.9 });
+    }
 
     this.drawLabels(s, layout, v, px);
   }

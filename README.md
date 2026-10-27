@@ -35,8 +35,8 @@ Quick test link: `http://localhost:5173/?seed=42&short=1&debug=1`
 | `laws`  | `1` \| `0`                | `1`        | `0`: no laws. The interaction matrices, swimming and turning are zeroed. Every free-standing cell, organism and herd does a persistent random walk instead: it heads in a random direction that drifts (~3 s persistence) and bounces off walls, the same for every type. Contact, springs, downward causation and `lock`/`catalysis`/`similar` still apply. The starting world is identical to `laws=1` for the same seed |
 | `wander`| 0..5                      | `1`        | `laws=0` only: strength of the random walk. `0` = jiggle on the spot. At `1`, organisms from different units meet ~13 times per 2 min (laws on: ~17) |
 | `reveal`| `1` \| `0`                | `1`        | `1`: organisms and herds show only their colour until hovered. `0`: contents always visible |
-| `lock`  | levels, e.g. `0,1` \| `all` | none      | lock & key at these levels (`0` cells, `1` membranes/organisms, `2` hazes/herds) |
-| `catalysis` | levels                | none       | catalysis at these levels |
+| `lock`  | `1` \| `0`                | `1`        | lock & key between cells (mint + violet bind; pairs stay attached inside organisms) |
+| `catalysis` | `1` \| `0`            | `1`        | catalysis between organisms (sky-blue makes rose spin; such pairs sit together in herds) |
 | `similar` | levels                  | none       | similarity ("birds of a feather") at these levels |
 | `org`   | `min-unstable`            | `5-8`      | membrane size band: stable with 5–7 cells, drains below 5 or at 8+ |
 | `herd`  | `min-unstable`            | `3-7`      | haze size band: stable with 3–6 membranes |
@@ -54,9 +54,9 @@ All parsed in `src/config.ts` and echoed into the session header.
 | click | select it; **click again on the same spot** → its parent (cell → organism → herd → back to cell) |
 | Esc / click empty space | clear selection |
 | drag the selected thing (or any part of it) | move it with all its parts (and its lock & key partner) |
-| Shift + drag | detach the selected thing from its parent and from its lock & key partner, then drag it |
-| drop a free thing on/near a compatible parent | it joins (if the recipe allows) |
-| drop a free thing on another free thing of the same kind | they combine into a new parent one level up: two cells → organism, two organisms → herd (if the grammar allows) |
+| Shift + drag | a member leaves its parent, taking its lock & key partner along (the pair stays attached); a free bound cell is pulled off its partner |
+| drop things together | nothing is built: they just meet (so lock & key and catalysis can be seen) |
+| C while dragging | join the compatible parent it touches, else combine it with every loose same-level thing touching it into a new parent one level up (2+ cells → organism, 2+ organisms → herd, if the grammar allows); the drag continues with the result |
 | I | isolate: freeze everything except the selection and its parts; I again releases |
 | wheel / drag background | zoom / pan |
 | ❚❚ 0.5× 1× 2× | time controls |
@@ -136,7 +136,7 @@ Download: `levels-sandbox-<seed>-<ISO timestamp>.json`. A copy is kept in `local
 | type | payload |
 |---|---|
 | `session_start` | `{hash}` of the generated world |
-| `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids:[target,dropped]}`, `isolate{id}`, `speed{speed}`, `swap{id}`. Coordinates are sim/world units |
+| `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids}` (2+, dragged first), `isolate{id}`, `speed{speed}`, `swap{id}`. Coordinates are sim/world units |
 | `hover` | `{id}` on every hover-target change (`null` = nothing) |
 | `camera` | `{x, y, zoom}` every 250 ms |
 | `hash` | `{hash}` every 30 ticks (1 s of sim time) |
@@ -176,7 +176,7 @@ Where the brief left something open, I chose the following.
 - The laws (3×3 cell, 3×3 organism, 2×2 herd matrices, cruise speeds and turn rates) are drawn from the seed, so each seed is a different "physics".
 - Interaction kernel is particle-life style: repulsive core below `rmin`, matrix-weighted triangular kernel up to `rmax`.
 - **Free cells feel all cells at full strength.** They sit in no unit, so there is no boundary to leak across. This makes them drift into organisms and cause crowding. Without it nothing ever got stressed and the goal never came into play.
-- Collision repulsion is always full strength (it is physical contact, not a "law").
+- Collision repulsion is always full strength (it is physical contact, not a "law"). It also acts **between levels** (see Mechanisms).
 - `eps` scales (a) the matrix between non-sibling same-tier entities and (b) the push-back of members on their parent. There is no direct cell ↔ organism-centre force.
 - Only free (top-level) organisms and herds self-propel (cruise along their heading, which turns at a per-kind rate). Members are carried by springs.
 - The hormone threshold is 0.25. Health decays at 0.15 × excess per s and recovers at 0.03 per s. In a 3-min probe (seed 42, no interaction) about 3 organisms died.
@@ -186,11 +186,10 @@ Where the brief left something open, I chose the following.
   it recovers only inside its band. At 0 it falls apart into free parts (`cause: "size"`). Herds now carry health too; their bar
   shows only when below full. Generated recipes use only stable sizes (organisms `[min, unstable-1]`, herds `[min, unstable-2]`
   for recipe 0 to stay within the cell budget).
-- **Join rule:** a free entity can join a parent one tier up if the parent is below its unstable size (8 cells / 7 organisms by default, so a participant can over-fill it by one and make it drain) and the entity's type appears in *any* recipe of the parent's species/kind. It joins the nearest such parent within its radius + 25 units. The join is decided in the UI at drop time via the pure `findJoinTarget` and logged as an explicit `join` action.
-- **Combine rule:** if no parent takes the dropped entity, it can combine with the nearest free entity of the same tier
-  within their radii + 25 units (`findCombineTarget`, logged as `combine`). The two found a new parent one tier up, at their
-  midpoint. Its species/herd kind must accept both types (each type appears in some recipe, as for join); among those, the
-  recipe covering most of the founders' types wins, with ties going to the lowest kind and then the lowest recipe. A founded composite starts with 2 members, below the size band, so it drains unless it is grown to the minimum by ordinary joins. Combining is off in the flat condition and while isolation is on, because the new
+- **Join rule:** a free entity can join a parent one tier up if the parent is below its unstable size (8 cells / 7 organisms by default, so a participant can over-fill it by one and make it drain) and the entity's type appears in *any* recipe of the parent's species/kind. A bound pair joins together, so there must be room and a fitting type for both. It joins the nearest such parent within the two radii + 25 units. The join happens only when C is pressed while dragging (via the pure `findJoinTarget`) and is logged as an explicit `join` action.
+- **Combine rule:** on C, if no parent takes the dragged entity, it and the loose same-tier things touching it (`findCombineGroup`, logged as `combine`) found a new parent one tier up, at their
+  centroid. A bound member's partner must be in the group (pairs are never split). Its species/herd kind must accept every type (each type appears in some recipe, as for join); among those, the
+  recipe covering most of the founders' types wins, with ties going to the lowest kind and then the lowest recipe. A founded composite usually starts below the size band, so it drains unless it is grown to the minimum by ordinary joins. Combining is off in the flat condition and while isolation is on, because the new
   parent would sit outside the isolated set.
 - Isolate: only the isolated subtree is simulated, and it feels no forces from frozen entities. Springs to a frozen parent still act.
 - Dragging translates the entity and its whole subtree to the pointer. The dragged entity is held still (velocity 0) while held. At most one `dragMove` is logged per frame.
@@ -198,27 +197,39 @@ Where the brief left something open, I chose the following.
 - **Flat condition:** cells are re-scattered at random (not at their hierarchical positions). The "single uniform matrix" is **all zeros**: a probe showed that any positive uniform attraction (even 0.02–0.05) makes clumps where 77–100 % of close pairs persist over 20 s, contradicting "groups never stabilise". At 0, pairings are transient (~40 %). Flat cells get more random motion (60 vs 30).
 - Flat health regions: 6 circles (r = 230) on a 3 × 2 grid. Region stress is the smoothed cell count inside divided by the count expected under uniform spread. Health falls when that ratio exceeds 1.5.
 
-**Same-level dynamics** (`lock`, `catalysis`, `similar`; all off by default)
+**Mechanisms** (`lock` and `catalysis` on by default; `similar` off by default)
 
-The rules are fixed and deterministic (no random draws or noise). They are kept in `DYNAMICS` in `src/sim/world.ts`, and the same
-tables apply at every level, where "type" means cell type, species or herd kind.
+The rules are fixed and deterministic (no random draws or noise), kept in `DYNAMICS` in `src/sim/world.ts`. Each mechanism
+belongs to one level; herds have none.
 
-| dynamic | rule | strength (cells / membranes / hazes) |
-|---|---|---|
-| lock & key | types 0 and 1 (mint and violet cells, sky-blue and rose membranes, haze kinds 0 and 1) bind when two **free**, unbound ones touch (gap < 4 / 8 / 20 units). A spring then holds them touching; dragging one drags the other; only Shift-drag (`detach`) separates them. Each thing has at most one partner. With lock on, dropping one half of a lock pair onto the other binds them instead of combining them | spring 60 / 30 / 8 |
-| catalysis | type 0 touching type 1 (gap < 6 / 12 / 30) makes the type-1 thing rotate. For a membrane or haze that turns its ring of parts. Cells show it by a turning nucleus and a small orientation dot; membranes and hazes get a rim dot at that level | 1.5 / 1.2 / 0.6 rad/s |
-| similarity | like types attract, unlike types repel, with the same kernel as the laws. Lock pairs are exempt from the repulsion where lock is on | gain 45 / 18 / 20 |
+| mechanism | level | rule | strength |
+|---|---|---|---|
+| lock & key | cells | A mint and a violet cell **bind** when two free, unbound ones touch (gap < 4 units). Inside an organism its unbound mint and violet cells **pair up on their own** (greedily, in child order), including in the generated world, after joins and combines, and every tick. Bonds are never made across organisms, or between a free cell and a member. A spring holds a pair touching; it is dragged as one; it **stays attached** when it joins or combines into an organism, and when that organism dies (the pair flies out together). Each pair shares one place on its organism's ring. A bound cell **mildly pushes away every other cell** within 30 units (100 at contact, fading to 0), so pairs don't clump | bond spring 60 |
+| catalysis | organisms | A sky-blue organism (species 0) touching a rose one (species 1; gap < 12) makes the rose one **spin at 4.2 rad/s** (~1 turn per 1.5 s). After contact ends it keeps spinning, slowing by 4 % per tick, and stops ~2.5 s later. It works at full strength wherever they are (free, in a herd, or one free and one in a herd). Inside a herd, a sky-blue and a rose member **sit together** at one place on the ring, just apart (gap 6), so the rose one keeps spinning; other members keep their own places. The spinning organism's ring of cells turns with it, and a rim dot shows its orientation | 4.2 rad/s |
+| similarity | per level (`similar=`) | like types attract, unlike types repel, with the same kernel as the laws. Mint–violet pairs are exempt from the repulsion while lock is on | gain 45 / 18 / 20 |
 
-They follow the same reach as the laws: full strength between siblings (same parent) and between loose cells, `eps` across
-unit boundaries. Bonds form only between loose things; joining or combining breaks them, and so does death. Similarity
-needs `move=1` (it is a force); catalysis also works with `move=0`.
+Bond and spin are entity state (`bond`, `spin`) and are hashed. Similarity needs `move=1` (it is a force); lock & key and
+catalysis also work with `move=0`.
 
-How they relate to composition: composition is still done by participants (join, combine) plus the generated world. The
-same-level dynamics shape what is available to compose. Similarity sorts loose cells into same-colour clumps (in a flat-world
-probe, ~100 % of close pairs were the same colour, against ~40 % without). Lock & key gives pairs that move as one. Catalysis
-makes particular neighbours visibly change. The size bands make a membrane or haze a stable unit only within its range. Loose
-things are sparse, so bonds almost never form on their own (none in 60 s at seed 42); they form when a participant drops one
-half onto the other.
+**Building only on C.** Dropping things together never builds anything. It just lets them meet, so a participant can see
+whether two cells lock, or whether one organism sets another spinning. Pressing **C while dragging** builds:
+1. if the dragged thing touches a compatible parent one level up (`findJoinTarget`, within the two radii + 25), it joins it;
+2. otherwise it and every loose same-level thing touching it, and so on outward (`findCombineGroup`; gap < 8 for cells,
+   < 20 for organisms), each with its bond partner, found a new parent one level up (`combine{ids}`);
+3. otherwise nothing happens; the dragged thing flashes red and `combine_refused` is logged.
+After a successful C the drag carries on with the whole it is now part of.
+
+**Collision between levels.** Free-standing things of different levels can't overlap: a loose cell can't pass through an
+organism or a herd, and a lone organism can't pass through a herd. The push (40 per unit of overlap) is shared by mass
+(number of cells inside), so a cell bounces off a herd rather than shoving it. Members are protected by their
+free-standing ancestor's outline. Same-level collision is unchanged.
+
+**What this does to the rest of the world** (probe: 10 seeds × 2 min, default dials, laws on, before → after this change):
+- loose cells can no longer get into organisms or herds, so crowding mostly stops. Organism deaths fell from 3.6 to 0.6 per
+  seed and time above the hormone threshold from 7.9 % to 0.8 %, so the health goal is now mostly quiet;
+- organisms from different units met 13.6 times per seed (was 18.6), as lone organisms now stop at herd edges
+  (`laws=0`: 6.9, was 12.2);
+- with lock on, the largest loose-cell clump averaged 3.3 cells, max 10 (was 6.4, max 32).
 
 **Still world and reveal**
 - `move=0` (optional; drifting is the default) turns off everything that makes things wander: self-propulsion and turning, the same-tier law matrices, free-cell
@@ -265,6 +276,6 @@ half onto the other.
 - Audio, gaze tracking (out of scope for v0).
 - Art polish; accessibility (colour-blind-safe palettes, keyboard selection).
 - Tune dynamics per seed (some seeds are calmer than others) and pick a fixed seed set for the study.
-- Richer join/combine recipes (e.g. recipe-exact founding); bonded pairs joining or founding as a unit.
+- Richer join/combine recipes (e.g. recipe-exact founding).
 - Seed-drawn or URL-configurable dynamics tables (currently fixed in `DYNAMICS`).
 - Compress logs (delta snapshots) to stay within storage limits for longer sessions.

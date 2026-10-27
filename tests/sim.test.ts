@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { simConfigOf } from '../src/config';
 import { replay } from '../src/replay';
 import { hashWorld } from '../src/sim/hash';
-import { type Dynamics, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, slotPos, step } from '../src/sim/world';
+import { DYNAMICS, type Dynamics, P, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, memberTargets, naturalRadius, ringUnits, step } from '../src/sim/world';
 import { scriptedActions, testConfig, testSession } from './helpers';
 
 function runScripted(query: string, ticks: number): string {
@@ -40,7 +40,7 @@ describe('determinism', () => {
 });
 
 describe('replay', () => {
-  it.each(['?seed=42', '?seed=42&move=0', '?seed=42&laws=0', '?seed=5&hier=0', '?seed=9&eps=0.3&size=irrelevant', '?seed=42&lock=all&catalysis=all&similar=all', '?seed=5&hier=0&lock=0&catalysis=0&similar=0'])(
+  it.each(['?seed=42', '?seed=42&move=0', '?seed=42&laws=0', '?seed=5&hier=0', '?seed=9&eps=0.3&size=irrelevant', '?seed=42&lock=all&catalysis=all&similar=all', '?seed=42&lock=0&catalysis=0', '?seed=5&hier=0&lock=0&catalysis=0&similar=0'])(
     'replays a recorded log (%s) to the logged final hash',
     (q) => {
       const session = testSession(q);
@@ -164,7 +164,7 @@ describe('combining', () => {
   const free = (s: WorldState, tier: number) => s.entities.filter((e) => e.alive && e.tier === tier && e.parent < 0);
   const combinable = (s: WorldState, tier: number) => {
     const fs = free(s, tier);
-    for (const a of fs) for (const b of fs) if (canCombine(s, a.id, b.id)) return [a, b] as const;
+    for (const a of fs) for (const b of fs) if (canCombine(s, [a.id, b.id])) return [a, b] as const;
     throw new Error('no combinable pair');
   };
 
@@ -200,18 +200,18 @@ describe('combining', () => {
     const member = s.entities.find((e) => e.alive && e.tier === 0 && e.parent >= 0)!;
     const lone = free(s, 1)[0];
     const herds = s.entities.filter((e) => e.tier === 2);
-    expect(canCombine(s, a.id, a.id)).toBe(false);
-    expect(canCombine(s, a.id, member.id)).toBe(false);
-    expect(canCombine(s, a.id, lone.id)).toBe(false);
-    expect(canCombine(s, herds[0].id, herds[1].id)).toBe(false);
+    expect(canCombine(s, [a.id, a.id])).toBe(false);
+    expect(canCombine(s, [a.id, member.id])).toBe(false);
+    expect(canCombine(s, [a.id, lone.id])).toBe(false);
+    expect(canCombine(s, [herds[0].id, herds[1].id])).toBe(false);
     // a type no species uses
     s.grammar.species = s.grammar.species.map((rs) => rs.map((rc) => rc.filter((t) => t !== b.type)));
-    expect(canCombine(s, a.id, b.id)).toBe(false);
+    expect(canCombine(s, [a.id, b.id])).toBe(false);
     const t = world();
     applyAction(t, { kind: 'isolate', id: a.id });
-    expect(canCombine(t, a.id, b.id)).toBe(false);
+    expect(canCombine(t, [a.id, b.id])).toBe(false);
     const f = world(false);
-    expect(canCombine(f, f.entities[0].id, f.entities[1].id)).toBe(false);
+    expect(canCombine(f, [f.entities[0].id, f.entities[1].id])).toBe(false);
     const n = f.entities.length;
     applyAction(f, { kind: 'combine', ids: [0, 1] });
     expect(f.entities.length).toBe(n);
@@ -251,11 +251,12 @@ describe('still world (move=0)', () => {
     run(s, 90);
     const free = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0);
     let pair: [number, number] | null = null;
-    for (const a of free) for (const b of free) if (!pair && canCombine(s, a.id, b.id)) pair = [a.id, b.id];
+    for (const a of free) for (const b of free) if (!pair && canCombine(s, [a.id, b.id])) pair = [a.id, b.id];
     run(s, 90, [{ kind: 'combine', ids: pair! }]);
     const o = s.entities[s.entities[pair![0]].parent];
-    o.children.forEach((c, k) => {
-      const [tx, ty] = slotPos(o, k, o.children.length);
+    const targets = memberTargets(s, o);
+    o.children.forEach((c) => {
+      const [tx, ty] = targets.get(c)!;
       expect(Math.hypot(s.entities[c].x - tx, s.entities[c].y - ty)).toBeLessThan(3);
     });
   });
@@ -329,7 +330,7 @@ function dynWorld(dyn: Partial<Dynamics>, opts: { seed?: number; hier?: boolean;
     eps: 0.05,
     seed: opts.seed ?? 42,
     move: opts.move ?? true,
-    dyn: { lock: OFF, catalysis: OFF, similar: OFF, ...dyn },
+    dyn: { lock: false, catalysis: false, similar: OFF, ...dyn },
   });
 }
 const lvl = (t: number) => [0, 1, 2].map((i) => i === t);
@@ -347,26 +348,31 @@ function place(s: WorldState, id: number, x: number, y: number): void {
   applyAction(s, { kind: 'dragStart', id, x, y });
   applyAction(s, { kind: 'dragEnd', id });
 }
-const freeOfType = (s: WorldState, tier: number, type: number, k = 0) =>
-  s.entities.filter((e) => e.alive && e.tier === tier && e.parent < 0 && e.type === type)[k];
 const ticks = (s: WorldState, n: number, evs: SimEvent[] = []) => {
   for (let i = 0; i < n; i++) evs.push(...step(s, []));
   return evs;
 };
 
-describe('lock & key', () => {
+describe('lock & key (cells only)', () => {
   const pairUp = (s: WorldState, typeB: number) => {
-    const a = freeOfType(s, 0, 0);
-    const b = freeOfType(s, 0, typeB);
+    const a = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 0 && e.bond < 0)!;
+    const b = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === typeB && e.bond < 0 && e !== a)!;
     const [x, y] = emptySpot(s);
     place(s, a.id, x, y);
     place(s, b.id, x + 10, y);
     ticks(s, 1);
     return [a, b] as const;
   };
+  /** bonds are only ever between two free cells or two cells of the same organism */
+  const bondsValid = (s: WorldState) =>
+    s.entities.every((e) => {
+      if (!e.alive || e.bond < 0) return true;
+      const b = s.entities[e.bond];
+      return e.tier === 0 && b.alive && b.bond === e.id && e.parent === b.parent;
+    });
 
-  it('a mint and a violet cell in contact bind, drag as one, and Shift-drag (detach) separates them', () => {
-    const s = dynWorld({ lock: lvl(0) });
+  it('free mint and violet cells in contact bind, drag as one, and Shift-drag separates them', () => {
+    const s = dynWorld({ lock: true });
     const [a, b] = pairUp(s, 1);
     expect(a.bond).toBe(b.id);
     expect(b.bond).toBe(a.id);
@@ -382,8 +388,8 @@ describe('lock & key', () => {
     expect(b.bond).toBe(-1);
   });
 
-  it('only lock pairs bind, and only where lock is switched on', () => {
-    const amber = dynWorld({ lock: lvl(0) });
+  it('only mint + violet bind, and only with lock on', () => {
+    const amber = dynWorld({ lock: true });
     const [a1] = pairUp(amber, 2);
     ticks(amber, 30);
     expect(a1.bond).toBe(-1);
@@ -393,45 +399,234 @@ describe('lock & key', () => {
     expect(off.entities.every((e) => e.bond === -1)).toBe(true);
   });
 
-  it('a lock pair binds instead of combining; combining one half with something else breaks the bond', () => {
-    const s = dynWorld({ lock: lvl(0) }, { move: false });
+  it('organisms never bond: lock & key is a cell-level mechanism', () => {
+    const s = dynWorld({ lock: true }, { move: false });
+    const [o1, o2] = s.entities.filter((e) => e.alive && e.tier === 1 && e.parent < 0);
+    o1.type = 0;
+    o2.type = 1;
+    const [x, y] = emptySpot(s, 200);
+    place(s, o1.id, x, y);
+    place(s, o2.id, x + naturalRadius(s, o1) + naturalRadius(s, o2) + 2, y);
+    ticks(s, 30);
+    expect(o1.bond).toBe(-1);
+    expect(o2.bond).toBe(-1);
+  });
+
+  it('organisms start with their mint and violet cells paired up, touching, and stay so', () => {
+    const s = dynWorld({ lock: true });
+    let pairs = 0;
+    for (const o of s.entities.filter((e) => e.tier === 1)) {
+      const kids = o.children.map((c) => s.entities[c]);
+      const expected = Math.min(kids.filter((c) => c.type === 0).length, kids.filter((c) => c.type === 1).length);
+      const bound = kids.filter((c) => c.bond >= 0 && s.entities[c.bond].parent === o.id).length / 2;
+      expect(bound).toBe(expected);
+      pairs += bound;
+    }
+    expect(pairs).toBeGreaterThan(0);
+    const touching = () =>
+      s.entities.filter((e) => e.alive && e.tier === 0 && e.parent >= 0 && e.bond > e.id).map((e) => Math.hypot(e.x - s.entities[e.bond].x, e.y - s.entities[e.bond].y));
+    expect(Math.max(...touching())).toBeLessThan(2 * P.cellR + 1);
+    ticks(s, 300);
+    expect(Math.max(...touching())).toBeLessThan(2 * P.cellR + 3);
+    expect(bondsValid(s)).toBe(true);
+  });
+
+  it('a bound pair stays attached when combined into a new organism, and is never split by combining', () => {
+    const s = dynWorld({ lock: true }, { move: false });
     const [a, b] = pairUp(s, 1);
-    expect(a.bond).toBe(b.id);
-    expect(canCombine(s, a.id, b.id)).toBe(false);
-    const other = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e !== a && e !== b && canCombine(s, e.id, a.id))!;
-    applyAction(s, { kind: 'combine', ids: [other.id, a.id] });
+    const c = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 2 && e.bond < 0)!;
+    place(s, c.id, b.x + 10, b.y);
+    expect(canCombine(s, [a.id, c.id])).toBe(false); // would split the pair
+    const group = findCombineGroup(s, a.id);
+    expect(group.slice().sort()).toEqual([a.id, b.id, c.id].sort());
+    applyAction(s, { kind: 'combine', ids: group });
     expect(a.parent).toBeGreaterThanOrEqual(0);
-    expect(a.bond).toBe(-1);
-    expect(b.bond).toBe(-1);
+    expect(new Set([a.parent, b.parent, c.parent]).size).toBe(1);
+    expect(a.bond).toBe(b.id);
+  });
+
+  it('a bound pair joins an organism together and stays attached; an unpaired mint inside pairs with a violet that joins', () => {
+    const s = dynWorld({ lock: true }, { move: false });
+    const [a, b] = pairUp(s, 1);
+    const o = s.entities.find((e) => e.alive && e.tier === 1 && e.parent < 0 && canJoin(s, a.id, e.id))!;
+    applyAction(s, { kind: 'join', id: a.id, parent: o.id });
+    expect(a.parent).toBe(o.id);
+    expect(b.parent).toBe(o.id);
+    expect(a.bond).toBe(b.id);
+
+    const t = dynWorld({ lock: true }, { move: false });
+    const mint = t.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 0 && e.bond < 0)!;
+    const amber = t.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 2)!;
+    applyAction(t, { kind: 'combine', ids: [mint.id, amber.id] });
+    const org = t.entities[mint.parent];
+    expect(mint.bond).toBe(-1);
+    const violet = t.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 1 && e.bond < 0 && canJoin(t, e.id, org.id))!;
+    applyAction(t, { kind: 'join', id: violet.id, parent: org.id });
+    expect(mint.bond).toBe(violet.id);
+  });
+
+  it('Shift-drag on a member takes its partner along, still attached', () => {
+    const s = dynWorld({ lock: true });
+    const a = s.entities.find((e) => e.alive && e.tier === 0 && e.parent >= 0 && e.bond >= 0)!;
+    const b = s.entities[a.bond];
+    applyAction(s, { kind: 'detach', id: a.id });
+    expect(a.parent).toBe(-1);
+    expect(b.parent).toBe(-1);
+    expect(a.bond).toBe(b.id);
+    expect(bondsValid(s)).toBe(true);
+  });
+
+  it('bonds never cross organisms or tie a free cell to a member (2 min of a busy world)', () => {
+    const s = dynWorld({ lock: true });
+    for (let i = 0; i < 30 * 120; i++) {
+      step(s, []);
+      if (i % 300 === 0) expect(bondsValid(s)).toBe(true);
+    }
+    expect(bondsValid(s)).toBe(true);
+  });
+
+  it('a bound pair mildly pushes other cells away, so pairs do not clump', () => {
+    const s = dynWorld({ lock: true }, { move: false });
+    const [a, b] = pairUp(s, 1);
+    const c = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 2)!;
+    place(s, c.id, a.x, a.y + 13);
+    ticks(s, 60);
+    const gap = Math.min(Math.hypot(c.x - a.x, c.y - a.y), Math.hypot(c.x - b.x, c.y - b.y));
+    expect(gap).toBeGreaterThan(20);
+    // without lock & key, nothing pushes it beyond contact
+    const t = dynWorld({}, { move: false });
+    const [ta] = pairUp(t, 1);
+    const tc = t.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 2)!;
+    place(t, tc.id, ta.x, ta.y + 13);
+    ticks(t, 60);
+    expect(Math.hypot(tc.x - ta.x, tc.y - ta.y)).toBeLessThan(15);
   });
 });
 
-describe('catalysis', () => {
-  const spinOf = (dyn: Partial<Dynamics>, tier: number, catalyst: number) => {
-    const s = dynWorld(dyn, { move: false });
-    const free = s.entities.filter((e) => e.alive && e.tier === tier && e.parent < 0);
-    const [target, cat] = tier === 0 ? [freeOfType(s, 0, 1), freeOfType(s, 0, catalyst)] : [free[0], free[1]];
-    if (tier > 0) {
-      target.type = 1;
-      cat.type = catalyst;
-    }
-    const [x, y] = emptySpot(s, tier === 0 ? 120 : 200);
+describe('catalysis (organisms only)', () => {
+  /** two free organisms set to catalyst (sky-blue, 0) and target (rose, 1), placed just touching */
+  const meet = (s: WorldState) => {
+    const [cat, target] = s.entities.filter((e) => e.alive && e.tier === 1 && e.parent < 0);
+    cat.type = 0;
+    target.type = 1;
+    const [x, y] = emptySpot(s, 250);
     place(s, target.id, x, y);
-    place(s, cat.id, x + (tier === 0 ? 12 : 60), y);
-    const before = target.angle;
-    ticks(s, 60);
-    return target.angle - before;
+    place(s, cat.id, x + naturalRadius(s, target) + naturalRadius(s, cat) + 4, y);
+    return [cat, target] as const;
   };
 
-  it('a violet cell turns only while a mint cell touches it', () => {
-    expect(spinOf({ catalysis: lvl(0) }, 0, 0)).toBeCloseTo(1.5 * 2, 1);
-    expect(spinOf({ catalysis: lvl(0) }, 0, 2)).toBe(0); // amber is not its catalyst
-    expect(spinOf({}, 0, 0)).toBe(0); // catalysis off
+  it('a rose organism spins fast while a sky-blue one touches it, keeps spinning for a while after, then stops', () => {
+    const s = dynWorld({ catalysis: true }, { move: false });
+    const [cat, target] = meet(s);
+    const a0 = target.angle;
+    ticks(s, 30);
+    expect(target.spin).toBeCloseTo(DYNAMICS.catSpin, 6);
+    expect(target.angle - a0).toBeGreaterThan(3.5); // ~4.2 rad in 1 s
+    expect(cat.spin).toBe(0); // one-way
+    place(s, cat.id, cat.x + 400, cat.y);
+    ticks(s, 15);
+    expect(target.spin).toBeGreaterThan(1);
+    expect(target.spin).toBeLessThan(DYNAMICS.catSpin);
+    ticks(s, 90);
+    expect(target.spin).toBe(0);
   });
 
-  it('works at the organism level too', () => {
-    expect(spinOf({ catalysis: lvl(1) }, 1, 0)).toBeGreaterThan(2);
-    expect(spinOf({ catalysis: lvl(0) }, 1, 0)).toBe(0);
+  it('nothing spins with catalysis off, and cells never catalyse', () => {
+    const off = dynWorld({}, { move: false });
+    const [, target] = meet(off);
+    ticks(off, 30);
+    expect(target.spin).toBe(0);
+
+    const s = dynWorld({ catalysis: true }, { move: false });
+    const mint = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 0)!;
+    const violet = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 1)!;
+    const [x, y] = emptySpot(s);
+    place(s, violet.id, x, y);
+    place(s, mint.id, x + 11, y);
+    const a0 = violet.angle;
+    ticks(s, 30);
+    expect(violet.angle).toBe(a0);
+    expect(violet.spin).toBe(0);
+  });
+
+  it('in a herd, a catalyst and its target sit together and the target keeps spinning', () => {
+    const s = dynWorld({ catalysis: true });
+    const herd = s.entities.find((h) => h.tier === 2 && h.children.some((c) => s.entities[c].type === 0) && h.children.some((c) => s.entities[c].type === 1))!;
+    expect(herd).toBeDefined();
+    const pair = ringUnits(s, herd).find((u) => u.length === 2)!;
+    const [c, t] = pair.map((id) => s.entities[id]);
+    expect([c.type, t.type]).toEqual([0, 1]);
+    ticks(s, 90);
+    expect(Math.hypot(c.x - t.x, c.y - t.y) - naturalRadius(s, c) - naturalRadius(s, t)).toBeLessThan(DYNAMICS.catMargin);
+    expect(t.spin).toBeCloseTo(DYNAMICS.catSpin, 6);
+    // members in different places on the ring are kept well apart (no clumping)
+    const units = ringUnits(s, herd);
+    for (let i = 0; i < units.length; i++)
+      for (let j = i + 1; j < units.length; j++)
+        for (const p of units[i])
+          for (const q of units[j]) {
+            const A = s.entities[p];
+            const B = s.entities[q];
+            expect(Math.hypot(A.x - B.x, A.y - B.y) - naturalRadius(s, A) - naturalRadius(s, B)).toBeGreaterThan(DYNAMICS.catMargin);
+          }
+  });
+});
+
+describe('combining a touching group (the C key)', () => {
+  it('collects everything touching, transitively, and nothing else', () => {
+    const s = dynWorld({}, { move: false });
+    const ambers = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 2).slice(0, 4);
+    const [x, y] = emptySpot(s, 200);
+    place(s, ambers[0].id, x, y);
+    place(s, ambers[1].id, x + 12, y);
+    place(s, ambers[2].id, x + 24, y);
+    place(s, ambers[3].id, x + 120, y);
+    expect(findCombineGroup(s, ambers[0].id)).toEqual([ambers[0].id, ambers[1].id, ambers[2].id]);
+  });
+
+  it('three touching cells become one organism of three', () => {
+    const s = dynWorld({}, { move: false });
+    const cells = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0).slice(0, 3);
+    const [x, y] = emptySpot(s, 200);
+    cells.forEach((c, i) => place(s, c.id, x + 12 * i, y));
+    const group = findCombineGroup(s, cells[0].id);
+    expect(canCombine(s, group)).toBe(true);
+    applyAction(s, { kind: 'combine', ids: group });
+    const o = s.entities[cells[0].parent];
+    expect(o.tier).toBe(1);
+    expect(o.children.slice().sort()).toEqual(cells.map((c) => c.id).sort());
+  });
+});
+
+describe('collision between levels', () => {
+  it('a loose cell pushed into a herd ends up outside it', () => {
+    const s = dynWorld({}, { move: false });
+    const herd = s.entities.find((e) => e.tier === 2)!;
+    const cell = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0)!;
+    const rH = naturalRadius(s, herd);
+    place(s, cell.id, herd.x + rH - 3, herd.y);
+    ticks(s, 90);
+    expect(Math.hypot(cell.x - herd.x, cell.y - herd.y)).toBeGreaterThan(rH + P.cellR - 1.5);
+  });
+
+  it('a lone organism pushed into a herd ends up outside it', () => {
+    const s = dynWorld({}, { move: false });
+    const herd = s.entities.find((e) => e.tier === 2)!;
+    const o = s.entities.find((e) => e.alive && e.tier === 1 && e.parent < 0)!;
+    const rH = naturalRadius(s, herd);
+    const rO = naturalRadius(s, o);
+    place(s, o.id, herd.x + rH + rO - 10, herd.y);
+    ticks(s, 120);
+    expect(Math.hypot(o.x - herd.x, o.y - herd.y)).toBeGreaterThan(rH + rO - 2);
+  });
+
+  it('something stopped at an edge can still join', () => {
+    const s = dynWorld({}, { move: false });
+    const o = s.entities.find((e) => e.alive && e.tier === 1 && e.parent < 0)!;
+    const cell = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && canJoin(s, e.id, o.id))!;
+    place(s, cell.id, o.x + naturalRadius(s, o) + P.cellR + 1, o.y);
+    ticks(s, 30);
+    expect(findJoinTarget(s, cell.id)).toBe(o.id);
   });
 });
 
@@ -464,7 +659,7 @@ describe('similarity', () => {
 describe('size band', () => {
   const founded = (s: WorldState, tier: number) => {
     const free = s.entities.filter((e) => e.alive && e.tier === tier && e.parent < 0);
-    for (const a of free) for (const b of free) if (canCombine(s, a.id, b.id)) {
+    for (const a of free) for (const b of free) if (canCombine(s, [a.id, b.id])) {
       applyAction(s, { kind: 'combine', ids: [a.id, b.id] });
       return s.entities[a.parent];
     }

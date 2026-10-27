@@ -1,6 +1,6 @@
 // All experiment dials + URL-param parsing.
 // ?hier=1|0&size=proxy|irrelevant&skin=biology|abstract&seed=42&eps=0.05&move=1|0&laws=1|0&wander=1&reveal=1|0
-//  &lock=0,1,2|all&catalysis=...&similar=...&org=5-8&herd=3-7&free=120&short=1&debug=1
+//  &lock=1|0&catalysis=1|0&similar=0,1,2|all&org=5-8&herd=3-7&free=120&short=1&debug=1
 
 import type { Dynamics, SimConfig } from './sim/world';
 
@@ -21,9 +21,11 @@ export interface Config {
   wander: number;
   /** composites show only their colour; their contents appear while hovered */
   reveal: boolean;
-  /** same-level dynamics, per level [cells, organisms, herds] */
-  lock: boolean[];
-  catalysis: boolean[];
+  /** lock & key between cells (mint + violet bind) */
+  lock: boolean;
+  /** catalysis between organisms (sky-blue makes rose spin) */
+  catalysis: boolean;
+  /** similarity per level [cells, organisms, herds] */
   similar: boolean[];
   /** composite size band [min, unstable): outside it a composite drains and falls apart */
   org: [number, number];
@@ -47,6 +49,8 @@ export const DEFAULTS = {
   laws: true,
   wander: 1,
   reveal: true,
+  lock: true,
+  catalysis: true,
   org: [5, 8] as [number, number],
   herd: [3, 7] as [number, number],
   free: 120,
@@ -57,6 +61,13 @@ export const DEFAULTS = {
 function bool(v: string | null, dflt: boolean): boolean {
   if (v === null) return dflt;
   return v === '1' || v.toLowerCase() === 'true';
+}
+
+/** "1" | "true" | "all" -> on, anything else given -> off */
+function onOff(v: string | null, dflt: boolean): boolean {
+  if (v === null) return dflt;
+  const t = v.trim().toLowerCase();
+  return t === '1' || t === 'true' || t === 'all';
 }
 
 /** "0,2" | "all" | "" -> per-level flags */
@@ -99,8 +110,8 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
     laws: bool(q.get('laws'), DEFAULTS.laws),
     wander: q.get('wander') !== null && Number.isFinite(Number(q.get('wander'))) ? Math.min(5, Math.max(0, Number(q.get('wander')))) : DEFAULTS.wander,
     reveal: bool(q.get('reveal'), DEFAULTS.reveal),
-    lock: levels(q.get('lock')),
-    catalysis: levels(q.get('catalysis')),
+    lock: onOff(q.get('lock'), DEFAULTS.lock),
+    catalysis: onOff(q.get('catalysis'), DEFAULTS.catalysis),
     similar: levels(q.get('similar')),
     org: band(q.get('org'), DEFAULTS.org),
     herd: band(q.get('herd'), DEFAULTS.herd),
@@ -113,6 +124,6 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
 }
 
 export function simConfigOf(c: Pick<Config, 'hier' | 'eps' | 'seed'> & Partial<Config>): SimConfig {
-  const dyn: Dynamics = { lock: c.lock ?? [false, false, false], catalysis: c.catalysis ?? [false, false, false], similar: c.similar ?? [false, false, false] };
+  const dyn: Dynamics = { lock: c.lock ?? DEFAULTS.lock, catalysis: c.catalysis ?? DEFAULTS.catalysis, similar: c.similar ?? [false, false, false] };
   return { hier: c.hier, eps: c.eps, seed: c.seed, move: c.move ?? true, laws: c.laws ?? true, wander: c.wander ?? DEFAULTS.wander, dyn, org: c.org ?? DEFAULTS.org, herd: c.herd ?? DEFAULTS.herd, free: c.free ?? DEFAULTS.free };
 }

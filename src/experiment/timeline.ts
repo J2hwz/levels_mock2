@@ -49,8 +49,9 @@ export function run(cfg: Config): JsPsych {
       `<div class="prose"><h2>Doing things</h2>
         <ul>
           <li><b>Drag</b> a selected thing to move it.</li>
-          <li><b>Shift + drag</b> a selected thing to pull it out of whatever it is in, or off whatever it is stuck to.</li>
-          <li><b>Drop</b> a loose thing onto something else and it may join it, or combine with it into something new.</li>
+          <li><b>Shift + drag</b> a selected thing to pull it out of whatever it is in (anything stuck to it comes too), or off whatever it is stuck to.</li>
+          <li>Dropping things next to each other just lets them meet. To <b>combine</b> things, press <b>C</b> while you are still dragging:
+            what you are dragging joins, or combines with, whatever it is touching.</li>
           <li>Press <b>I</b> to freeze everything except the selected thing. Press I again to unfreeze.</li>
         </ul></div>`,
       `<div class="prose"><h2>Your first task</h2>

@@ -31,10 +31,13 @@ export interface SimConfig {
   free?: number;
 }
 
-/** Per tier [cells, organisms, herds]: which same-level dynamics act at that level. */
+/**
+ * Same-level dynamics. Lock & key acts only between cells and catalysis only between organisms
+ * (DYNAMICS.lockTier / catalysisTier); herds have neither. Similarity is switched per tier [cells, organisms, herds].
+ */
 export interface Dynamics {
-  lock: readonly boolean[];
-  catalysis: readonly boolean[];
+  lock: boolean;
+  catalysis: boolean;
   similar: readonly boolean[];
 }
 
@@ -46,19 +49,35 @@ export const DEFAULT_HERD: readonly [number, number] = [3, 7];
  * Types are cell types (T0), species (T1) and herd kinds (T2); the same tables apply at every level.
  */
 export const DYNAMICS = {
-  /** lock & key: unordered pairs of different types that bind (mint+violet / sky-blue+rose / kind 0+1) */
+  /** lock & key acts between cells only */
+  lockTier: 0,
+  /** catalysis acts between organisms only */
+  catalysisTier: 1,
+  /** lock & key: unordered pairs of cell types that bind (mint + violet) */
   lockPairs: [[0, 1]] as readonly (readonly [number, number])[],
-  /** catalysis: [catalyst, target]: the target rotates while the catalyst touches it */
+  /** catalysis: [catalyst, target] species: the target spins while the catalyst touches it (sky-blue -> rose) */
   catalysis: [[0, 1]] as readonly (readonly [number, number])[],
-  /** bond spring strength / damping, per tier */
-  bondK: [60, 30, 8],
-  bondC: [6, 4, 2],
-  /** a free pair binds when closer than rA + rB + bindMargin */
-  bindMargin: [4, 8, 20],
+  /** bond spring strength / damping */
+  bondK: 60,
+  bondC: 6,
+  /** a pair binds when closer than rA + rB + bindMargin */
+  bindMargin: 4,
+  /** a bound cell pushes every cell except its partner within this range ... */
+  lockRepelR: 30,
+  /** ... with this strength at contact, fading to 0 at the range (collision is 600, laws <= 150) */
+  lockRepel: 100,
   /** "touching" for catalysis: closer than rA + rB + catMargin */
-  catMargin: [6, 12, 30],
-  /** catalysed spin, rad/s */
-  catSpin: [1.5, 1.2, 0.6],
+  catMargin: 12,
+  /** catalysed spin, rad/s (~1 turn per 1.5 s) */
+  catSpin: 4.2,
+  /** without contact the spin decays by this factor per tick (4.2 -> 0.3 rad/s in ~2.2 s) ... */
+  catDecay: 0.96,
+  /** ... and stops below this (~2.5 s after contact ends) */
+  catStop: 0.2,
+  /** gap between the two organisms of a catalyst-target pair placed together in a herd */
+  pairGap: 6,
+  /** "touching" for combining a group with C: gap below this, per tier [cells, organisms] */
+  combineMargin: [8, 20],
   /** similarity: like types attract, unlike repel (same kernel as the laws) */
   simGain: [45, 18, 20],
   /** health lost per second while a composite is outside its size band */
@@ -97,6 +116,8 @@ export interface Entity {
   realisation: number;
   /** laws=0 only: direction of the persistent random walk (separate from `angle`, which catalysis turns) */
   heading: number;
+  /** T1: catalysed spin, rad/s; set on contact with a catalyst, decays after */
+  spin: number;
 }
 
 export interface Grammar {
@@ -150,8 +171,8 @@ export type Action =
   | { kind: 'dragEnd'; id: number }
   | { kind: 'detach'; id: number }
   | { kind: 'join'; id: number; parent: number }
-  /** two free same-tier entities found a new parent one tier up: [target, dropped] */
-  | { kind: 'combine'; ids: [number, number] }
+  /** free same-tier entities (2+) found a new parent one tier up; ids[0] is the dragged one */
+  | { kind: 'combine'; ids: number[] }
   | { kind: 'isolate'; id: number | null }
   | { kind: 'speed'; speed: number }
   | { kind: 'swap'; id: number };
@@ -217,6 +238,8 @@ export const P = {
   // flat: uniform matrix value. Any attraction > 0 makes clumps that persist; 0 keeps groupings transient.
   flatUniform: 0,
   wallK: 20,
+  /** collision between free-standing things of different levels: push per unit of overlap */
+  crossK: 40,
   joinMargin: 25,
   nRegions: 6,
   regionR: 230,
@@ -244,6 +267,98 @@ export function slotPos(parent: Entity, k: number, n: number): [number, number] 
   const R = ringRadius(parent.tier, n);
   const a = parent.angle + (2 * Math.PI * k) / n;
   return [parent.x + R * dcos(a), parent.y + R * dsin(a)];
+}
+
+/**
+ * A parent's children grouped into places on its ring. A pair shares one place, its two members touching:
+ * in an organism, a lock & key pair of its own cells; in a herd (catalysis on), a catalyst + target organism,
+ * matched greedily in child order. Everything else gets a place of its own.
+ */
+export function ringUnits(s: WorldState, p: Entity): number[][] {
+  const partner = new Map<number, number>();
+  if (p.tier === 1) {
+    for (const c of p.children) {
+      const b = s.entities[c].bond;
+      if (b >= 0 && s.entities[b].parent === p.id) partner.set(c, b);
+    }
+  } else if (p.tier === 2 && catalysisOn(s.config, 1)) {
+    for (const c of p.children) {
+      if (partner.has(c)) continue;
+      for (const t of p.children) {
+        if (t !== c && !partner.has(t) && catalyses(s.entities[c].type, s.entities[t].type)) {
+          partner.set(c, t);
+          partner.set(t, c);
+          break;
+        }
+      }
+    }
+  }
+  const units: number[][] = [];
+  const placed = new Set<number>();
+  for (const c of p.children) {
+    if (placed.has(c)) continue;
+    placed.add(c);
+    const q = partner.get(c);
+    if (q !== undefined && !placed.has(q)) {
+      placed.add(q);
+      units.push([c, q]);
+    } else {
+      units.push([c]);
+    }
+  }
+  return units;
+}
+
+/**
+ * Where each child of `p` is held: places spread evenly round the ring; the two members of a pair sit either
+ * side of their place along the ring, touching (cells) or just apart (organisms, inside catalysis contact).
+ */
+export function memberTargets(s: WorldState, p: Entity): Map<number, [number, number]> {
+  const out = new Map<number, [number, number]>();
+  const units = ringUnits(s, p);
+  const R = ringRadius(p.tier, p.children.length);
+  units.forEach((u, k) => {
+    const a = p.angle + (2 * Math.PI * k) / units.length;
+    const cx = p.x + R * dcos(a);
+    const cy = p.y + R * dsin(a);
+    if (u.length === 1) {
+      out.set(u[0], [cx, cy]);
+      return;
+    }
+    // tangent along the ring
+    const tx = -dsin(a);
+    const ty = dcos(a);
+    const [m0, m1] = u.map((id) => s.entities[id]);
+    const half = p.tier === 1 ? [P.cellR, P.cellR] : [naturalRadius(s, m0) + DYNAMICS.pairGap / 2, naturalRadius(s, m1) + DYNAMICS.pairGap / 2];
+    out.set(m0.id, [cx - tx * half[0], cy - ty * half[0]]);
+    out.set(m1.id, [cx + tx * half[1], cy + ty * half[1]]);
+  });
+  return out;
+}
+
+/** Move each child (with its parts) straight onto its place, e.g. right after building. */
+function settle(s: WorldState, p: Entity): void {
+  for (const [id, [x, y]] of memberTargets(s, p)) {
+    const c = s.entities[id];
+    translateTree(s, id, x - c.x, y - c.y);
+  }
+}
+
+/** Lock & key inside an organism: its unbound mint and violet cells pair up, greedily in child order. */
+function pairWithin(s: WorldState, o: Entity): void {
+  if (o.tier !== 1 || !lockOn(s.config, 0)) return;
+  for (const c of o.children) {
+    const a = s.entities[c];
+    if (a.bond >= 0) continue;
+    for (const d of o.children) {
+      const b = s.entities[d];
+      if (d !== c && b.bond < 0 && isLockPair(a.type, b.type)) {
+        a.bond = d;
+        b.bond = c;
+        break;
+      }
+    }
+  }
 }
 
 export function descendants(s: WorldState, id: number, out: number[] = []): number[] {
@@ -283,9 +398,18 @@ export function band(c: SimConfig, tier: Tier): readonly [number, number] {
   return tier === 1 ? (c.org ?? DEFAULT_ORG) : (c.herd ?? DEFAULT_HERD);
 }
 
-/** Per-tier switch of a same-level dynamic. */
-function dynOn(c: SimConfig, kind: keyof Dynamics, tier: number): boolean {
-  return c.dyn?.[kind][tier] === true;
+/** Lock & key is on, and this is its level (cells). */
+export function lockOn(c: SimConfig, tier: number): boolean {
+  return tier === DYNAMICS.lockTier && c.dyn?.lock === true;
+}
+
+/** Catalysis is on, and this is its level (organisms). */
+export function catalysisOn(c: SimConfig, tier: number): boolean {
+  return tier === DYNAMICS.catalysisTier && c.dyn?.catalysis === true;
+}
+
+function similarOn(c: SimConfig, tier: number): boolean {
+  return c.dyn?.similar[tier] === true;
 }
 
 function makeGrammar(r: RngState, c: SimConfig): Grammar {
@@ -373,6 +497,7 @@ function newEntity(s: WorldState, tier: Tier, type: number, x: number, y: number
     density: tier === 2 ? 1 : 0,
     realisation: 0,
     heading: 0,
+    spin: 0,
   };
   // stateless hash, so generation consumes no extra rng draws and laws=1 worlds are unchanged
   e.heading = hash01(s.config.seed, e.id) * 2 * Math.PI;
@@ -394,6 +519,8 @@ function buildOrganism(s: WorldState, species: number, realisation: number, x: n
     const [cx, cy] = slotPos(o, k, cells.length);
     adopt(o, newEntity(s, 0, t, cx, cy));
   });
+  pairWithin(s, o);
+  settle(s, o);
   return o;
 }
 
@@ -406,6 +533,7 @@ function buildHerd(s: WorldState, kind: number, realisation: number, x: number, 
     const [ox, oy] = slotPos(h, k, members.length);
     adopt(h, buildOrganism(s, sp, 0, ox, oy, rand(s.rng) * Math.PI * 2));
   });
+  settle(s, h);
   return h;
 }
 
@@ -566,27 +694,37 @@ function translateHeld(s: WorldState, id: number, dx: number, dy: number): void 
   if (b >= 0) translateTree(s, b, dx, dy);
 }
 
+/** A free entity together with its bond partner (if any): a bound pair always joins / combines as one. */
+export function withPartner(s: WorldState, id: number): number[] {
+  const b = s.entities[id].bond;
+  return b >= 0 ? [id, b] : [id];
+}
+
 export function canJoin(s: WorldState, childId: number, parentId: number): boolean {
   if (!s.config.hier) return false;
   const c = s.entities[childId];
   const p = s.entities[parentId];
   if (!c || !p || !c.alive || !p.alive || c.parent >= 0 || p.tier !== c.tier + 1) return false;
+  const group = withPartner(s, childId).map((id) => s.entities[id]);
+  if (group.some((g) => !g.alive || g.parent >= 0)) return false;
   // joins are allowed up to the unstable size: over-filling makes the composite drain
-  if (p.children.length >= band(s.config, p.tier)[1]) return false;
+  if (p.children.length + group.length - 1 >= band(s.config, p.tier)[1]) return false;
   const recipes = p.tier === 1 ? s.grammar.species[p.type] : s.grammar.herds[p.type];
-  return recipes.some((rc) => rc.includes(c.type));
+  return group.every((g) => recipes.some((rc) => rc.includes(g.type)));
 }
 
-/** Nearest compatible parent the entity was dropped onto, or -1. */
+/** Nearest compatible parent the entity is touching (or nearly), or -1. */
 export function findJoinTarget(s: WorldState, id: number): number {
   const c = s.entities[id];
   if (!c || !c.alive || c.parent >= 0 || c.tier >= 2) return -1;
+  const rc = naturalRadius(s, c);
   let best = -1;
   let bestD = Infinity;
   for (const p of s.entities) {
     if (!p.alive || p.tier !== c.tier + 1 || !canJoin(s, id, p.id)) continue;
     const d = dhypot(p.x - c.x, p.y - c.y);
-    if (d < naturalRadius(s, p) + P.joinMargin && d < bestD) {
+    // + rc: collision between levels stops things at the parent's edge, so measure from there
+    if (d < naturalRadius(s, p) + rc + P.joinMargin && d < bestD) {
       best = p.id;
       bestD = d;
     }
@@ -626,51 +764,68 @@ export function combineKind(s: WorldState, tier: Tier, types: readonly number[])
   return best;
 }
 
-export function canCombine(s: WorldState, aId: number, bId: number): boolean {
-  if (!s.config.hier || s.isolated >= 0 || aId === bId) return false;
-  const a = s.entities[aId];
-  const b = s.entities[bId];
-  if (!a || !b || !a.alive || !b.alive || a.parent >= 0 || b.parent >= 0) return false;
-  if (a.tier !== b.tier || a.tier >= 2) return false;
-  // where lock & key is on, dropping one half of a lock pair on the other binds them instead
-  if (dynOn(s.config, 'lock', a.tier) && isLockPair(a.type, b.type)) return false;
-  return combineKind(s, a.tier, [a.type, b.type]) !== null;
+/**
+ * Can these free same-tier entities (2+) found a new parent one tier up? Every bound member's partner must
+ * be in the group too (a pair is never split by combining).
+ */
+export function canCombine(s: WorldState, ids: readonly number[]): boolean {
+  if (!s.config.hier || s.isolated >= 0 || ids.length < 2 || new Set(ids).size !== ids.length) return false;
+  const ms = ids.map((id) => s.entities[id]);
+  if (ms.some((m) => !m || !m.alive || m.parent >= 0)) return false;
+  const tier = ms[0].tier;
+  if (tier >= 2 || ms.some((m) => m.tier !== tier)) return false;
+  if (ms.some((m) => m.bond >= 0 && !ids.includes(m.bond))) return false;
+  return combineKind(s, tier, ms.map((m) => m.type)) !== null;
 }
 
-/** Nearest free same-tier entity the entity was dropped onto that it can combine with, or -1. */
-export function findCombineTarget(s: WorldState, id: number): number {
+/**
+ * The group C would combine: the dragged entity, its partner, and every free same-tier entity touching the
+ * group (and so on outward), each with its partner. Dragged first, then in order of discovery.
+ */
+export function findCombineGroup(s: WorldState, id: number): number[] {
   const c = s.entities[id];
-  if (!c || !c.alive || c.parent >= 0 || c.tier >= 2) return -1;
-  const rc = naturalRadius(s, c);
-  let best = -1;
-  let bestD = Infinity;
-  for (const o of s.entities) {
-    if (!o.alive || o.tier !== c.tier || !canCombine(s, o.id, id)) continue;
-    const d = dhypot(o.x - c.x, o.y - c.y);
-    if (d < rc + naturalRadius(s, o) + P.joinMargin && d < bestD) {
-      best = o.id;
-      bestD = d;
+  if (!c || !c.alive || c.parent >= 0 || c.tier >= 2) return [];
+  const margin = DYNAMICS.combineMargin[c.tier];
+  const group: number[] = [];
+  const add = (x: number) => {
+    for (const m of withPartner(s, x)) if (!group.includes(m)) group.push(m);
+  };
+  add(id);
+  for (let i = 0; i < group.length; i++) {
+    const g = s.entities[group[i]];
+    const rg = naturalRadius(s, g);
+    for (const o of s.entities) {
+      if (!o.alive || o.tier !== c.tier || o.parent >= 0 || group.includes(o.id)) continue;
+      if (dhypot(o.x - g.x, o.y - g.y) - rg - naturalRadius(s, o) < margin) add(o.id);
     }
   }
-  return best;
+  return group;
 }
 
-function foundParent(s: WorldState, a: Entity, b: Entity, events: SimEvent[]): void {
-  const kind = combineKind(s, a.tier, [a.type, b.type]);
+function foundParent(s: WorldState, ids: readonly number[], events: SimEvent[]): void {
+  const ms = ids.map((id) => s.entities[id]);
+  const kind = combineKind(s, ms[0].tier, ms.map((m) => m.type));
   if (!kind) return;
-  const tier = (a.tier + 1) as Tier;
-  const p = newEntity(s, tier, kind.type, (a.x + b.x) / 2, (a.y + b.y) / 2);
-  p.vx = (a.vx + b.vx) / 2;
-  p.vy = (a.vy + b.vy) / 2;
+  const tier = (ms[0].tier + 1) as Tier;
+  let x = 0, y = 0, vx = 0, vy = 0;
+  for (const m of ms) {
+    x += m.x / ms.length;
+    y += m.y / ms.length;
+    vx += m.vx / ms.length;
+    vy += m.vy / ms.length;
+  }
+  const p = newEntity(s, tier, kind.type, x, y);
+  p.vx = vx;
+  p.vy = vy;
   p.angle = rand(s.rng) * Math.PI * 2;
   p.realisation = kind.realisation;
-  unbond(s, a);
-  unbond(s, b);
-  adopt(p, a);
-  adopt(p, b);
-  a.signal = 0;
-  b.signal = 0;
-  events.push({ kind: 'founded', id: p.id, tier, type: p.type, realisation: p.realisation, members: [a.id, b.id] });
+  // bonds are kept: a lock & key pair stays attached inside the new organism
+  for (const m of ms) {
+    adopt(p, m);
+    m.signal = 0;
+  }
+  pairWithin(s, p);
+  events.push({ kind: 'founded', id: p.id, tier, type: p.type, realisation: p.realisation, members: [...ids] });
 }
 
 function swapRealisation(s: WorldState, e: Entity, events: SimEvent[]): void {
@@ -687,6 +842,8 @@ function swapRealisation(s: WorldState, e: Entity, events: SimEvent[]): void {
     const child = e.tier === 1 ? newEntity(s, 0, t, x, y) : buildOrganism(s, t, k % 2, x, y, rand(s.rng) * Math.PI * 2);
     adopt(e, child);
   });
+  pairWithin(s, e);
+  settle(s, e);
   const added: number[] = [];
   for (let id = first; id < s.nextId; id++) added.push(id);
   events.push({ kind: 'swapped', id: e.id, realisation: e.realisation, removed, added });
@@ -733,25 +890,32 @@ export function applyAction(s: WorldState, a: Action): SimEvent[] {
     case 'dragEnd':
       if (s.drag && s.drag.id === a.id) s.drag = null;
       break;
-    case 'detach':
-      // Shift-drag: out of its parent and off its bond partner
-      if (validId(s, a.id)) {
-        unbond(s, s.entities[a.id]);
-        unparent(s, s.entities[a.id], events);
+    case 'detach': {
+      // Shift-drag. A member leaves its parent and takes its bond partner along (the pair stays attached);
+      // a free bound entity is pulled off its partner.
+      if (!validId(s, a.id)) break;
+      const e = s.entities[a.id];
+      if (e.parent >= 0) {
+        const partner = e.bond >= 0 && s.entities[e.bond].parent === e.parent ? s.entities[e.bond] : null;
+        if (e.bond >= 0 && !partner) unbond(s, e);
+        unparent(s, e, events);
+        if (partner) unparent(s, partner, events);
+      } else {
+        unbond(s, e);
       }
-      break;
-    case 'join':
-      if (canJoin(s, a.id, a.parent)) {
-        unbond(s, s.entities[a.id]);
-        s.entities[a.id].parent = a.parent;
-        s.entities[a.parent].children.push(a.id);
-      }
-      break;
-    case 'combine': {
-      const [x, y] = a.ids;
-      if (canCombine(s, x, y)) foundParent(s, s.entities[x], s.entities[y], events);
       break;
     }
+    case 'join':
+      // the entity joins with its bond partner, which stays attached inside
+      if (canJoin(s, a.id, a.parent)) {
+        const p = s.entities[a.parent];
+        for (const id of withPartner(s, a.id)) adopt(p, s.entities[id]);
+        pairWithin(s, p);
+      }
+      break;
+    case 'combine':
+      if (canCombine(s, a.ids)) foundParent(s, a.ids, events);
+      break;
     case 'isolate':
       s.isolated = validId(s, a.id) ? a.id : -1;
       break;
@@ -799,17 +963,19 @@ function advance(s: WorldState, events: SimEvent[]): void {
     if (ents[s.drag.id].bond >= 0) held[ents[s.drag.id].bond] = 1;
   }
 
-  // 0. lock & key: free, unbonded lock-pair entities in contact bind (ascending id order, first match wins)
-  for (let t = 0; t < 3; t++) {
-    if (!dynOn(s.config, 'lock', t)) continue;
-    const list = byTier[t];
+  // 0. lock & key (cells only). Inside an organism its unbound mint and violet cells pair up; free ones bind
+  // when they touch (ascending id order, first match wins). Never across organisms, never free with a member.
+  const lock = lockOn(s.config, 0);
+  if (lock) {
+    for (const o of byTier[1]) pairWithin(s, o);
+    const list = byTier[0];
     for (let i = 0; i < list.length; i++) {
       const a = list[i];
       if (a.parent >= 0 || a.bond >= 0 || held[a.id]) continue;
       for (let j = i + 1; j < list.length; j++) {
         const b = list[j];
         if (b.parent >= 0 || b.bond >= 0 || held[b.id] || !isLockPair(a.type, b.type)) continue;
-        if (dhypot(b.x - a.x, b.y - a.y) < rad[a.id] + rad[b.id] + DYNAMICS.bindMargin[t]) {
+        if (dhypot(b.x - a.x, b.y - a.y) < rad[a.id] + rad[b.id] + DYNAMICS.bindMargin) {
           a.bond = b.id;
           b.bond = a.id;
           break;
@@ -817,8 +983,8 @@ function advance(s: WorldState, events: SimEvent[]): void {
       }
     }
   }
-  // catalysed spin rate per entity (strongest catalyst in contact wins)
-  const catSpin = new Float64Array(n);
+  // organisms touched by a catalyst this tick (catalysis: organisms only, full strength wherever they are)
+  const catTouched = new Uint8Array(n);
 
   // 1. same-tier interactions (+ crowding for cells)
   for (let t = 0; t < 3; t++) {
@@ -852,22 +1018,25 @@ function advance(s: WorldState, events: SimEvent[]): void {
           const tri = 1 - Math.abs(2 * d - rmax - rmin) / (rmax - rmin);
           fa += P.gain[t] * K[a.type][b.type] * tri * w;
           fb += P.gain[t] * K[b.type][a.type] * tri * w;
-          if (dynOn(s.config, 'similar', t) && !(dynOn(s.config, 'lock', t) && isLockPair(a.type, b.type))) {
+          if (similarOn(s.config, t) && !(lockOn(s.config, t) && isLockPair(a.type, b.type))) {
             // birds of a feather: like types attract, unlike types repel (lock pairs are exempt: they fit)
             const sim = DYNAMICS.simGain[t] * (a.type === b.type ? 1 : -1) * tri * w;
             fa += sim;
             fb += sim;
           }
         }
-        if (dynOn(s.config, 'catalysis', t) && d < rad[a.id] + rad[b.id] + DYNAMICS.catMargin[t]) {
-          // catalysis: a touching catalyst makes its target rotate (same sibling/eps weighting as the laws)
-          const free = t === 0 && (a.parent < 0 || b.parent < 0);
-          const w = !hier || free || a.parent === b.parent ? 1 : eps;
-          const rate = DYNAMICS.catSpin[t] * w;
-          if (catalyses(a.type, b.type)) catSpin[b.id] = Math.max(catSpin[b.id], rate);
-          if (catalyses(b.type, a.type)) catSpin[a.id] = Math.max(catSpin[a.id], rate);
+        if (catalysisOn(s.config, t) && d < rad[a.id] + rad[b.id] + DYNAMICS.catMargin) {
+          // catalysis: a touching catalyst makes its target spin
+          if (catalyses(a.type, b.type)) catTouched[b.id] = 1;
+          if (catalyses(b.type, a.type)) catTouched[a.id] = 1;
         }
         if (t === 0) {
+          if (lock && d < DYNAMICS.lockRepelR) {
+            // a bound cell mildly pushes away every cell except its partner, so pairs don't clump
+            const k = DYNAMICS.lockRepel * (1 - d / DYNAMICS.lockRepelR);
+            if (a.bond >= 0 && a.bond !== b.id) fb -= k;
+            if (b.bond >= 0 && b.bond !== a.id) fa -= k;
+          }
           if (d < P.stressR && (a.parent < 0 || a.parent !== b.parent)) {
             const c = 1 - d / P.stressR;
             crowd[a.id] += c;
@@ -886,6 +1055,35 @@ function advance(s: WorldState, events: SimEvent[]): void {
         fy[a.id] += fa * uy;
         fx[b.id] -= fb * ux;
         fy[b.id] -= fb * uy;
+      }
+    }
+  }
+
+  // 1b. collision between levels: free-standing things of different levels can't overlap (a loose cell can't
+  // pass through an organism or herd, a lone organism can't pass through a herd). Their members are protected
+  // by their disc. The push is shared by mass (cells inside), so a cell bounces off a herd rather than shoving it.
+  if (hier) {
+    const tops = ents.filter((e) => on(e) && e.parent < 0);
+    const mass = (e: Entity): number => (e.tier === 0 ? 1 : e.children.reduce((m, c) => m + mass(ents[c]), 0) || 1);
+    const m = new Float64Array(n);
+    for (const e of tops) m[e.id] = mass(e);
+    for (let i = 0; i < tops.length; i++) {
+      const a = tops[i];
+      for (let j = i + 1; j < tops.length; j++) {
+        const b = tops[j];
+        if (a.tier === b.tier) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const reach = rad[a.id] + rad[b.id];
+        if (dx * dx + dy * dy >= reach * reach) continue;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+        const f = P.crossK * (reach - d);
+        const ma = m[a.id];
+        const mb = m[b.id];
+        fx[a.id] -= ((f * mb) / (ma + mb)) * (dx / d);
+        fy[a.id] -= ((f * mb) / (ma + mb)) * (dy / d);
+        fx[b.id] += ((f * ma) / (ma + mb)) * (dx / d);
+        fy[b.id] += ((f * ma) / (ma + mb)) * (dy / d);
       }
     }
   }
@@ -954,12 +1152,17 @@ function advance(s: WorldState, events: SimEvent[]): void {
     }
   }
 
-  // 4. springs: members toward slots around parent; parent feels eps back-reaction
+  // 4. springs: members toward their place around the parent (pairs share a place); parent feels eps back-reaction
+  const targets = new Map<number, Map<number, [number, number]>>();
   for (const e of ents) {
     if (!on(e) || e.parent < 0) continue;
     const p = ents[e.parent];
-    const k = p.children.indexOf(e.id);
-    const [tx, ty] = slotPos(p, k, p.children.length);
+    let pt = targets.get(p.id);
+    if (!pt) {
+      pt = memberTargets(s, p);
+      targets.set(p.id, pt);
+    }
+    const [tx, ty] = pt.get(e.id)!;
     const Fx = P.springK[p.tier] * (tx - e.x) + P.springC[p.tier] * (p.vx - e.vx);
     const Fy = P.springK[p.tier] * (ty - e.y) + P.springC[p.tier] * (p.vy - e.vy);
     fx[e.id] += Fx;
@@ -977,8 +1180,8 @@ function advance(s: WorldState, events: SimEvent[]): void {
     const dy = b.y - a.y;
     const d = dhypot(dx, dy) || 1e-6;
     const ext = d - (rad[a.id] + rad[b.id]);
-    const Fx = DYNAMICS.bondK[a.tier] * ext * (dx / d) + DYNAMICS.bondC[a.tier] * (b.vx - a.vx);
-    const Fy = DYNAMICS.bondK[a.tier] * ext * (dy / d) + DYNAMICS.bondC[a.tier] * (b.vy - a.vy);
+    const Fx = DYNAMICS.bondK * ext * (dx / d) + DYNAMICS.bondC * (b.vx - a.vx);
+    const Fy = DYNAMICS.bondK * ext * (dy / d) + DYNAMICS.bondC * (b.vy - a.vy);
     fx[a.id] += Fx;
     fy[a.id] += Fy;
     fx[b.id] -= Fx;
@@ -1024,7 +1227,12 @@ function advance(s: WorldState, events: SimEvent[]): void {
   // 6. integrate (all tiers at the same fixed rate)
   for (const e of ents) {
     if (!on(e)) continue;
-    e.angle += catSpin[e.id] * P.dt;
+    if (e.tier === 1) {
+      // catalysed spin: full speed while a catalyst touches, then winding down over ~2 s
+      if (catTouched[e.id]) e.spin = Math.max(e.spin, DYNAMICS.catSpin);
+      else if (e.spin > 0) e.spin = e.spin * DYNAMICS.catDecay < DYNAMICS.catStop ? 0 : e.spin * DYNAMICS.catDecay;
+      e.angle += e.spin * P.dt;
+    }
     if (held[e.id]) {
       e.vx = 0;
       e.vy = 0;

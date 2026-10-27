@@ -77,51 +77,148 @@ for (const hier of [1, 0]) {
   await page.close();
 }
 
-// same-level dynamics on at every level, contents always shown so bonds and spinning cells are visible
+// mechanisms (lock & key between cells, catalysis between organisms; both on by default), contents always shown
 {
-  const page = await openSandbox('?seed=42&debug=1&short=1&reveal=0&lock=all&catalysis=all&similar=all');
-  await page.waitForTimeout(8000);
+  const page = await openSandbox('?seed=42&debug=1&short=1&reveal=0');
+  await page.waitForTimeout(3000);
   await page.screenshot({ path: `${OUT}/hier1_dynamics.png` });
-  // drop a loose mint cell onto the nearest loose violet one: they should bind (lock & key)
   await page.locator('[data-speed="0"]').click();
+
+  /** centre the camera on a world point */
+  const look = (x, y, zoom) => page.evaluate(([x, y, zoom]) => Object.assign(window.__sandbox.camera, { x, y, zoom }), [x, y, zoom]);
+  /** drag entity `id` (already selected) so its centre lands on world point (wx, wy); press C before letting go if asked */
+  const dragTo = async (id, wx, wy, pressC = false) => {
+    const [x, y] = await screenPos(page, id);
+    const [tx, ty] = await page.evaluate(([wx, wy]) => window.__sandbox.worldToScreen(wx, wy), [wx, wy]);
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i++) await page.mouse.move(x + ((tx - x) * i) / 10, y + ((ty - y) * i) / 10);
+    if (pressC) await page.keyboard.press('c');
+    await page.mouse.up();
+  };
+  const ent = (id) => page.evaluate((id) => {
+    const e = window.__sandbox.state.entities[id];
+    return { x: e.x, y: e.y, parent: e.parent, bond: e.bond, spin: e.spin, alive: e.alive };
+  }, id);
+
+  // an organism with a lock & key pair inside, and a herd with a catalyst + target pair
+  const inside = await page.evaluate(() => {
+    const s = window.__sandbox.state;
+    const org = s.entities.find((e) => e.alive && e.tier === 1 && e.children.some((c) => s.entities[c].bond >= 0));
+    const herd = s.entities.find((h) => h.alive && h.tier === 2 && h.children.some((c) => s.entities[c].spin > 0));
+    return { org: org && { id: org.id, x: org.x, y: org.y }, herd: herd && { id: herd.id, x: herd.x, y: herd.y, spin: herd.children.map((c) => s.entities[c].spin.toFixed(2)) } };
+  });
+  if (inside.org) {
+    await look(inside.org.x, inside.org.y, 7);
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: `${OUT}/mech_lock_inside_organism.png` });
+  }
+  if (inside.herd) {
+    await look(inside.herd.x, inside.herd.y, 2.6);
+    await page.locator('[data-speed="1"]').click();
+    await page.waitForTimeout(700);
+    await page.locator('[data-speed="0"]').click();
+    await page.screenshot({ path: `${OUT}/mech_catalysis_in_herd.png` });
+  }
+  console.log('organism with a lock pair inside:', inside.org?.id, '| herd with a spinning target, member spins:', inside.herd?.spin);
+
+  // drop a loose mint cell next to a loose violet one: they bind (no key needed to *see* lock & key)
   const pair = await page.evaluate(() => {
-    const sb = window.__sandbox;
-    const free = sb.state.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0 && e.bond < 0);
+    const s = window.__sandbox.state;
+    const free = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0 && e.bond < 0);
     let best = null;
-    for (const a of free.filter((e) => e.type === 0)) {
+    for (const a of free.filter((e) => e.type === 0))
       for (const b of free.filter((e) => e.type === 1)) {
         const d = Math.hypot(a.x - b.x, a.y - b.y);
         if (!best || d < best.d) best = { a: a.id, b: b.id, d };
       }
-    }
-    const a = sb.state.entities[best.a];
-    const b = sb.state.entities[best.b];
-    sb.camera.x = (a.x + b.x) / 2;
-    sb.camera.y = (a.y + b.y) / 2;
-    sb.camera.zoom = Math.min(5, 500 / Math.max(best.d, 50));
     return best;
   });
+  let A = await ent(pair.a);
+  let B = await ent(pair.b);
+  await look((A.x + B.x) / 2, (A.y + B.y) / 2, Math.min(5, 500 / Math.max(pair.d, 50)));
   await page.waitForTimeout(200);
-  let [x, y] = await screenPos(page, pair.a);
-  await page.mouse.click(x, y);
-  const [bx, by] = await screenPos(page, pair.b);
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  for (let i = 1; i <= 10; i++) await page.mouse.move(x + ((bx - x) * i) / 10, y + ((by - y) * i) / 10);
-  await page.mouse.up();
+  const [ax, ay] = await screenPos(page, pair.a);
+  await page.mouse.click(ax, ay);
+  await dragTo(pair.a, B.x - 11, B.y);
+  await page.locator('[data-speed="1"]').click();
+  await page.waitForTimeout(800);
+  await page.locator('[data-speed="0"]').click();
+  A = await ent(pair.a);
+  console.log(`dropped mint #${pair.a} beside violet #${pair.b} (no key): bond ${A.bond}, parent ${A.parent}`);
+  await look(A.x, A.y, 6);
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: `${OUT}/mech_lock_bound_pair.png` });
+
+  // drop a lone sky-blue organism against a lone rose one: the rose one spins, and keeps spinning a while after
+  const orgs = await page.evaluate(() => {
+    const s = window.__sandbox.state;
+    const lone = s.entities.filter((e) => e.alive && e.tier === 1 && e.parent < 0);
+    const cat = lone.find((e) => e.type === 0);
+    const tgt = lone.find((e) => e.type === 1);
+    return cat && tgt ? { cat: cat.id, tgt: tgt.id } : null;
+  });
+  if (orgs) {
+    const T = await ent(orgs.tgt);
+    const Cg = await ent(orgs.cat);
+    // frame both organisms so the catalyst can be clicked
+    await look((T.x + Cg.x) / 2, (T.y + Cg.y) / 2, Math.min(2.5, 1100 / Math.max(Math.hypot(T.x - Cg.x, T.y - Cg.y), 1)));
+    await page.waitForTimeout(200);
+    const [cx, cy] = await screenPos(page, orgs.cat);
+    // select the catalyst organism: its centre has no cell on it, so one click selects the organism itself
+    await page.mouse.click(cx, cy);
+    const rT = await page.evaluate(({ c, t }) => {
+      const s = window.__sandbox.state;
+      const r = (e) => 6 + 2.4 * e.children.length + 9;
+      return r(s.entities[c]) + r(s.entities[t]) + 4;
+    }, { c: orgs.cat, t: orgs.tgt });
+    await dragTo(orgs.cat, T.x - rT, T.y);
+    await page.locator('[data-speed="1"]').click();
+    await page.waitForTimeout(600);
+    const during = (await ent(orgs.tgt)).spin;
+    const dbg = await page.evaluate(({ c, t }) => {
+      const s = window.__sandbox.state;
+      const C = s.entities[c];
+      const T = s.entities[t];
+      return { sel: document.querySelector('.inspect')?.textContent?.slice(0, 40), cat: [C.x | 0, C.y | 0, C.parent], tgt: [T.x | 0, T.y | 0, T.parent], d: Math.hypot(C.x - T.x, C.y - T.y) | 0 };
+    }, { c: orgs.cat, t: orgs.tgt });
+    console.log('catalysis demo debug', JSON.stringify(dbg), 'aimed gap', rT);
+    await page.screenshot({ path: `${OUT}/mech_catalysis_touch.png` });
+    console.log(`sky-blue #${orgs.cat} dropped against rose #${orgs.tgt}: rose spin ${during.toFixed(2)} rad/s`);
+  } else {
+    console.log('no lone sky-blue + rose organisms in this seed: catalysis touch demo skipped');
+  }
+
+  // drop a loose cell onto the middle of a herd: collision between levels pushes it back out
+  const hc = await page.evaluate(() => {
+    const s = window.__sandbox.state;
+    const herd = s.entities.find((e) => e.alive && e.tier === 2);
+    const cell = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0 && e.bond < 0)
+      .sort((a, b) => Math.hypot(a.x - herd.x, a.y - herd.y) - Math.hypot(b.x - herd.x, b.y - herd.y))[0];
+    return { herd: herd.id, cell: cell.id };
+  });
+  const H = await page.evaluate((id) => {
+    const e = window.__sandbox.state.entities[id];
+    return { x: e.x, y: e.y, r: window.__sandbox.layout()[id].r };
+  }, hc.herd);
+  const C0 = await ent(hc.cell);
+  await look((H.x + C0.x) / 2, (H.y + C0.y) / 2, 1.5);
+  await page.waitForTimeout(200);
+  const [hx, hy] = await screenPos(page, hc.cell);
+  await page.mouse.click(hx, hy);
+  await dragTo(hc.cell, H.x + H.r * 0.5, H.y);
   await page.locator('[data-speed="1"]').click();
   await page.waitForTimeout(1500);
-  const bond = await page.evaluate((id) => window.__sandbox.state.entities[id].bond, pair.a);
-  console.log(`${OUT}/hier1_dynamics_zoom.png: dropped mint #${pair.a} on violet #${pair.b} -> bond ${bond}`);
-  await page.evaluate((id) => {
-    const sb = window.__sandbox;
-    const e = sb.state.entities[id];
-    sb.camera.x = e.x;
-    sb.camera.y = e.y;
-    sb.camera.zoom = 5;
-  }, pair.a);
-  await page.waitForTimeout(300);
-  await page.screenshot({ path: `${OUT}/hier1_dynamics_zoom.png` });
+  await page.locator('[data-speed="0"]').click();
+  const C1 = await ent(hc.cell);
+  const Hn = await page.evaluate((id) => {
+    const e = window.__sandbox.state.entities[id];
+    return { x: e.x, y: e.y, r: window.__sandbox.layout()[id].r };
+  }, hc.herd);
+  console.log(`cell #${hc.cell} dropped inside herd #${hc.herd}: now ${(Math.hypot(C1.x - Hn.x, C1.y - Hn.y) - Hn.r).toFixed(1)} units outside its edge`);
+  await look(C1.x, C1.y, 2.5);
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: `${OUT}/mech_collision_herd_edge.png` });
   await page.close();
 }
 
@@ -183,17 +280,31 @@ for (const hier of [1, 0]) {
   const detached = await page.evaluate((id) => window.__sandbox.state.entities[id].parent, ids.cell2);
   console.log('shift-drag detached cell parent =', detached);
 
-  // drag it back onto its old organism to re-join
-  [x, y] = await screenPos(page, ids.cell2);
-  const [ox, oy] = await screenPos(page, ids.org);
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  for (let i = 1; i <= 10; i++) await page.mouse.move(x + ((ox - x) * i) / 10, y + ((oy - y) * i) / 10);
-  await page.mouse.up();
-  const rejoined = await page.evaluate((id) => window.__sandbox.state.entities[id].parent, ids.cell2);
-  console.log('drop re-joined cell parent =', rejoined, '(organism', ids.org + ')');
+  // drag it back onto its old organism: dropping alone does not re-join; pressing C while dragging does
+  const dragOnto = async (id, ontoId, pressC) => {
+    const [fx, fy] = await screenPos(page, id);
+    const [ox, oy] = await screenPos(page, ontoId);
+    // land just off the target's centre (and never a zero-length drag)
+    const [tx, ty] = [ox + 14, oy + 6];
+    await page.mouse.move(fx, fy);
+    await page.mouse.down();
+    // go out and come back in, so the drag always registers even if it starts at the target
+    await page.mouse.move(fx + 60, fy - 40, { steps: 4 });
+    await page.mouse.move(tx, ty, { steps: 8 });
+    if (pressC) await page.keyboard.press('c');
+    await page.mouse.up();
+  };
+  const parentOf = (id) => page.evaluate((id) => window.__sandbox.state.entities[id].parent, id);
+  // centre on the organism so nothing (e.g. the controls legend) covers the drop point
+  await page.evaluate((id) => { const sb = window.__sandbox; const n = sb.layout()[id]; sb.camera.x = n.x; sb.camera.y = n.y; }, ids.org);
+  await page.waitForTimeout(150);
+  await dragOnto(ids.cell2, ids.org, false);
+  const droppedOnly = await parentOf(ids.cell2);
+  await dragOnto(ids.cell2, ids.org, true);
+  const rejoined = await parentOf(ids.cell2);
+  console.log(`re-join: drop alone -> parent ${droppedOnly}; with C -> parent ${rejoined} (organism ${ids.org})`);
 
-  // drop one loose cell onto another: they combine into a new organism
+  // drop one loose cell onto another: nothing is built; then C while dragging combines them into a new organism
   const pair = await page.evaluate(() => {
     const sb = window.__sandbox;
     const s = sb.state;
@@ -219,11 +330,9 @@ for (const hier of [1, 0]) {
   await page.waitForTimeout(200);
   [x, y] = await screenPos(page, pair.b);
   await page.mouse.click(x, y);
-  const [bx, by] = await screenPos(page, pair.a);
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  for (let i = 1; i <= 10; i++) await page.mouse.move(x + ((bx - x) * i) / 10, y + ((by - y) * i) / 10);
-  await page.mouse.up();
+  await dragOnto(pair.b, pair.a, false);
+  console.log('drop one loose cell onto another without C -> parents', await parentOf(pair.a), await parentOf(pair.b));
+  await dragOnto(pair.b, pair.a, true);
   const founded = await page.evaluate(({ a, b }) => {
     const s = window.__sandbox.state;
     const p = s.entities[a].parent;

@@ -45,6 +45,9 @@ export function scriptedActions(session: Session): Map<number, Action[]> {
   at(61, { kind: 'dragMove', id: free.id, x: lone.x, y: lone.y });
   at(62, { kind: 'dragEnd', id: free.id }, { kind: 'join', id: free.id, parent: lone.id });
   at(70, { kind: 'combine', ids: [pair[0].id, pair[1].id] });
+  // a group of three (the C key combines everything touching); refused harmlessly if not allowed
+  const trio = freeCells.filter((e) => e !== free && e !== pair[0] && e !== pair[1] && e.bond < 0).slice(0, 3);
+  if (trio.length === 3) at(74, { kind: 'combine', ids: trio.map((e) => e.id) });
   if (lones.length >= 2) at(72, { kind: 'combine', ids: [lones[0].id, lones[1].id] });
   at(80, { kind: 'isolate', id: herd.id });
   at(120, { kind: 'isolate', id: null });
