@@ -50,6 +50,7 @@ export function hashWorld(s: WorldState): string {
     h.num(e.health);
     h.num(e.density);
     h.num(e.realisation);
+    h.num(e.bond);
   }
   for (const r of s.regions) {
     h.num(r.health);

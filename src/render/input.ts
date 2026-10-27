@@ -1,11 +1,13 @@
 // Pointer / keyboard -> Action translation.
 //   hover: highlight; click: select deepest; click again on the same spot: select parent
-//   drag selected (or a part of it): move it with all its parts; Shift-drag: detach first
-//   drop a free entity near a compatible parent: join; drag background: pan; wheel: zoom
+//   drag selected (or a part of it): move it with all its parts (and its bond partner);
+//   Shift-drag: detach from its parent and bond partner first
+//   drop a free entity near a compatible parent: join; else onto a free peer of the same tier: combine
+//   into a new parent one tier up; drag background: pan; wheel: zoom
 //   Esc: clear selection; I: isolate toggle; S (debug only): swap realisation
 
 import type { Action, WorldState } from '../sim/world';
-import { findJoinTarget } from '../sim/world';
+import { findCombineTarget, findJoinTarget } from '../sim/world';
 import type { Camera } from './camera';
 import { type Layout, displayToSim, hitChain } from './layout';
 
@@ -99,7 +101,7 @@ export class InputController {
         d.mode = 'drag';
         d.dragId = sel;
         const s = this.host.state;
-        if (d.shift && s.entities[sel].parent >= 0) this.host.act({ kind: 'detach', id: sel });
+        if (d.shift && (s.entities[sel].parent >= 0 || s.entities[sel].bond >= 0)) this.host.act({ kind: 'detach', id: sel });
         const n = this.host.layout()[sel];
         const [wx, wy] = this.host.camera.screenToWorld(d.sx, d.sy);
         d.offX = n ? n.x - wx : 0;
@@ -137,7 +139,12 @@ export class InputController {
       this.flush();
       this.host.act({ kind: 'dragEnd', id: d.dragId });
       const target = findJoinTarget(this.host.state, d.dragId);
-      if (target >= 0) this.host.act({ kind: 'join', id: d.dragId, parent: target });
+      if (target >= 0) {
+        this.host.act({ kind: 'join', id: d.dragId, parent: target });
+      } else {
+        const peer = findCombineTarget(this.host.state, d.dragId);
+        if (peer >= 0) this.host.act({ kind: 'combine', ids: [peer, d.dragId] });
+      }
     }
   }
 

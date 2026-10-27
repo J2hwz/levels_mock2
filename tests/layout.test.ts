@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeLayout, hitChain, nominalRadius } from '../src/render/layout';
+import { computeLayout, hitChain, nominalRadius, openRoots } from '../src/render/layout';
 import { createWorld, step } from '../src/sim/world';
 
 function pearson(xs: number[], ys: number[]): number {
@@ -76,5 +76,15 @@ describe('hit testing', () => {
     const chain = hitChain(s, layout, cell.x, cell.y, 2);
     expect(chain[0]).toBe(cell.id);
     expect(chain.map((id) => s.entities[id].tier)).toEqual([0, 1, 2]);
+  });
+});
+
+describe('reveal on hover', () => {
+  it('opens the top-level thing around whatever is hovered', () => {
+    const s = createWorld({ hier: true, eps: 0.05, seed: 42 });
+    const herd = s.entities.find((e) => e.tier === 2)!;
+    const cell = s.entities[s.entities[herd.children[0]].children[0]];
+    const free = s.entities.find((e) => e.tier === 0 && e.parent < 0)!;
+    expect([...openRoots(s, [cell.id, free.id, -1])]).toEqual([herd.id, free.id]);
   });
 });

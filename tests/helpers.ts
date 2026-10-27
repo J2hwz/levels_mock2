@@ -30,6 +30,10 @@ export function scriptedActions(session: Session): Map<number, Action[]> {
   const cell = find((e) => e.tier === 0 && e.parent >= 0, 3);
   const free = find((e) => e.tier === 0 && e.parent < 0, 4);
   const lone = find((e) => e.tier === 1 && e.parent < 0, 5);
+  // two free cells (and two lone organisms) that may combine; refused harmlessly where they can't
+  const freeCells = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0);
+  const pair = freeCells.flatMap((a, i) => freeCells.slice(i + 1).map((b) => [a, b] as const)).find(([a, b]) => a.type !== b.type && a !== free && b !== free) ?? [freeCells[0], freeCells[1]];
+  const lones = s.entities.filter((e) => e.alive && e.tier === 1 && e.parent < 0 && e !== lone);
   const m = new Map<number, Action[]>();
   const at = (t: number, ...a: Action[]) => m.set(t, [...(m.get(t) ?? []), ...a]);
   at(5, { kind: 'select', id: cell.id }, { kind: 'speed', speed: 2 });
@@ -40,6 +44,8 @@ export function scriptedActions(session: Session): Map<number, Action[]> {
   at(60, { kind: 'dragStart', id: free.id, x: free.x, y: free.y });
   at(61, { kind: 'dragMove', id: free.id, x: lone.x, y: lone.y });
   at(62, { kind: 'dragEnd', id: free.id }, { kind: 'join', id: free.id, parent: lone.id });
+  at(70, { kind: 'combine', ids: [pair[0].id, pair[1].id] });
+  if (lones.length >= 2) at(72, { kind: 'combine', ids: [lones[0].id, lones[1].id] });
   at(80, { kind: 'isolate', id: herd.id });
   at(120, { kind: 'isolate', id: null });
   at(130, { kind: 'swap', id: org.id });

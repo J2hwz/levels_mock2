@@ -4,7 +4,7 @@ import { Application, Container, Graphics, Text } from 'pixi.js';
 import type { SizeMode } from '../config';
 import { type Entity, P, type WorldState, descendants } from '../sim/world';
 import { Camera } from './camera';
-import type { Layout } from './layout';
+import { type Layout, openRoots } from './layout';
 import { type Glyph, type SkinDef, lerpColor } from './skins';
 
 export interface ViewState {
@@ -12,6 +12,8 @@ export interface ViewState {
   hovered: number;
   debug: boolean;
   size: SizeMode;
+  /** composites closed (solid colour) unless hovered / selected / isolated */
+  reveal: boolean;
   skin: SkinDef;
   /** render-only clock in seconds, for cosmetic wobble */
   time: number;
@@ -27,6 +29,7 @@ export class Renderer {
   private readonly gOver = new Graphics();
   private readonly labels = new Container();
   private readonly labelPool = new Map<number, Text>();
+  private hidden: (e: Entity) => boolean = () => false;
 
   private constructor(readonly app: Application) {
     this.world.addChild(this.gRegion, this.gHerd, this.gOrg, this.gCell, this.gOver, this.labels);
@@ -67,6 +70,18 @@ export class Renderer {
     }
     const dim = (e: Entity) => (activeSet && !activeSet[e.id] ? 0.22 : 1);
 
+    // reveal: a top-level composite is closed (drawn as its colour only) unless something in it is
+    // hovered, selected or isolated; everything inside a closed one is hidden
+    const open = v.reveal ? openRoots(s, [v.hovered, v.selected, s.isolated]) : null;
+    const rootOf = (e: Entity) => {
+      let r = e;
+      while (r.parent >= 0) r = s.entities[r.parent];
+      return r;
+    };
+    const closed = (e: Entity) => open !== null && e.parent < 0 && e.tier > 0 && !open.has(e.id);
+    const hidden = (e: Entity) => open !== null && e.parent >= 0 && !open.has(rootOf(e).id);
+    this.hidden = hidden;
+
     for (const g of [this.gRegion, this.gHerd, this.gOrg, this.gCell, this.gOver]) g.clear();
 
     // world bounds
@@ -78,26 +93,41 @@ export class Renderer {
       this.healthBar(this.gRegion, r.x, r.y - r.r - 10 * px, 60 * px, r.health, sk);
     }
 
+    // lock & key bonds: a short link between bound partners, under everything else
+    for (const e of s.entities) {
+      if (!e.alive || e.bond < e.id || hidden(e)) continue;
+      const a = layout[e.id];
+      const b = layout[e.bond];
+      if (!a || !b) continue;
+      this.gRegion.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2 * px, color: sk.ui, alpha: 0.5 * dim(e) });
+    }
+    // catalysis turns things: show their orientation at the levels where it is on
+    const spinMark = (t: number) => s.config.dyn?.catalysis[t] === true;
+
     for (const e of s.entities) {
       if (!e.alive) continue;
       const n = layout[e.id];
-      if (!n) continue;
+      if (!n || hidden(e)) continue;
       const a = dim(e);
+      const shut = closed(e);
       if (e.tier === 2) {
         const col = sk.herd[e.type];
-        this.gHerd.circle(n.x, n.y, n.r).fill({ color: col, alpha: sk.herdFill * a });
+        this.gHerd.circle(n.x, n.y, n.r).fill({ color: col, alpha: (shut ? CLOSED_ALPHA : sk.herdFill) * a });
         if (v.size === 'irrelevant') {
           dashedCircle(this.gHerd, n.x, n.y, n.r, Math.max(10, Math.round(n.r / (6 * px))));
           this.gHerd.stroke({ width: 1.5 * px, color: col, alpha: Math.min(1, sk.herdStroke * 2) * a });
         } else {
           this.gHerd.circle(n.x, n.y, n.r).stroke({ width: 1.5 * px, color: col, alpha: sk.herdStroke * a });
         }
+        if (spinMark(2)) rimMark(this.gHerd, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.08, 3 * px), col, a);
+        if (e.health < 1) this.healthBar(this.gHerd, n.x, n.y - n.r - 6 * px, Math.max(n.r * 0.6, 20 * px), e.health, sk, a);
       } else if (e.tier === 1) {
         const col = sk.species[e.type];
-        blob(this.gOrg, n.x, n.y, n.r, sk.wobble, v.time * 1.3 + e.id);
-        this.gOrg.fill({ color: col, alpha: sk.membraneFill * a });
-        blob(this.gOrg, n.x, n.y, n.r, sk.wobble, v.time * 1.3 + e.id);
+        blob(this.gOrg, n.x, n.y, n.r, sk.wobble, v.time * 1.3 + e.id, e.angle);
+        this.gOrg.fill({ color: col, alpha: (shut ? CLOSED_ALPHA : sk.membraneFill) * a });
+        blob(this.gOrg, n.x, n.y, n.r, sk.wobble, v.time * 1.3 + e.id, e.angle);
         this.gOrg.stroke({ width: Math.max(1.5 * px, n.r * 0.08), color: col, alpha: sk.membraneStroke * a });
+        if (spinMark(1)) rimMark(this.gOrg, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.12, 1.5 * px), col, a);
         const w = Math.max(n.r * 1.3, 14 * px);
         this.healthBar(this.gOrg, n.x, n.y - n.r - w * 0.15 - 2 * px, w, e.health, sk, a);
       } else {
@@ -107,11 +137,15 @@ export class Renderer {
         if (sk.wobble > 0) {
           this.gCell.circle(n.x, n.y, r).fill({ color: col, alpha: 0.3 * a });
           this.gCell.circle(n.x, n.y, r).stroke({ width: r * 0.22, color: col, alpha: sk.cellAlpha * a });
-          glyph(this.gCell, sk.nucleus[e.type], n.x, n.y, r * 0.48);
+          glyph(this.gCell, sk.nucleus[e.type], n.x, n.y, r * 0.48, e.angle);
           this.gCell.fill({ color: col, alpha: a });
         } else {
-          glyph(this.gCell, sk.glyph[e.type], n.x, n.y, r);
+          glyph(this.gCell, sk.glyph[e.type], n.x, n.y, r, e.angle);
           this.gCell.fill({ color: col, alpha: a });
+        }
+        if (spinMark(0)) {
+          // off-centre dot so even round cells show that they turn
+          this.gCell.circle(n.x + r * 0.78 * Math.cos(e.angle), n.y + r * 0.78 * Math.sin(e.angle), r * 0.2).fill({ color: sk.ui, alpha: 0.8 * a });
         }
       }
     }
@@ -119,7 +153,7 @@ export class Renderer {
     // hover + selection
     const ring = (id: number, alpha: number, width: number) => {
       const n = id >= 0 ? layout[id] : undefined;
-      if (!n || !s.entities[id].alive) return;
+      if (!n || !s.entities[id].alive || this.hidden(s.entities[id])) return;
       this.gOver.circle(n.x, n.y, n.r + 3 * px).stroke({ width: width * px, color: sk.ui, alpha });
     };
     if (v.hovered !== v.selected) ring(v.hovered, 0.45, 1.5);
@@ -140,7 +174,7 @@ export class Renderer {
     const seen = new Set<number>();
     if (v.debug) {
       for (const e of s.entities) {
-        if (!e.alive) continue;
+        if (!e.alive || this.hidden(e)) continue;
         if (e.tier === 0 && this.camera.zoom < 2.5) continue;
         const n = layout[e.id];
         if (!n) continue;
@@ -170,7 +204,15 @@ export class Renderer {
   }
 }
 
-function blob(g: Graphics, x: number, y: number, r: number, wob: number, phase: number): void {
+/** fill alpha of a closed composite: it shows as its colour, hiding its parts */
+const CLOSED_ALPHA = 0.85;
+
+/** small dot on the rim at the entity's orientation */
+function rimMark(g: Graphics, x: number, y: number, r: number, angle: number, size: number, color: number, alpha: number): void {
+  g.circle(x + r * Math.cos(angle), y + r * Math.sin(angle), size).fill({ color, alpha });
+}
+
+function blob(g: Graphics, x: number, y: number, r: number, wob: number, phase: number, angle = 0): void {
   if (wob <= 0) {
     g.circle(x, y, r);
     return;
@@ -179,13 +221,15 @@ function blob(g: Graphics, x: number, y: number, r: number, wob: number, phase: 
   const N = 28;
   for (let i = 0; i < N; i++) {
     const th = (2 * Math.PI * i) / N;
-    const rr = r * (1 + wob * Math.sin(3 * th + phase) + wob * 0.5 * Math.sin(5 * th - phase * 1.3));
+    // the wobble pattern turns with the organism, so rotation is visible
+    const rel = th - angle;
+    const rr = r * (1 + wob * Math.sin(3 * rel + phase) + wob * 0.5 * Math.sin(5 * rel - phase * 1.3));
     pts.push(x + rr * Math.cos(th), y + rr * Math.sin(th));
   }
   g.poly(pts, true);
 }
 
-function glyph(g: Graphics, kind: Glyph, x: number, y: number, r: number): void {
+function glyph(g: Graphics, kind: Glyph, x: number, y: number, r: number, angle = 0): void {
   if (kind === 'circle') {
     g.circle(x, y, r);
     return;
@@ -194,7 +238,7 @@ function glyph(g: Graphics, kind: Glyph, x: number, y: number, r: number): void 
   const rr = kind === 'triangle' ? r * 1.25 : r * 1.05;
   const pts: number[] = [];
   for (let i = 0; i < k; i++) {
-    const th = -Math.PI / 2 + (2 * Math.PI * i) / k;
+    const th = -Math.PI / 2 + angle + (2 * Math.PI * i) / k;
     pts.push(x + rr * Math.cos(th), y + rr * Math.sin(th));
   }
   g.poly(pts, true);

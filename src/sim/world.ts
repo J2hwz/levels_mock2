@@ -12,7 +12,50 @@ export interface SimConfig {
   hier: boolean;
   eps: number;
   seed: number;
+  /** false = still world: no self-propulsion, laws, noise or spin; only springs, contact and walls. Missing = true. */
+  move?: boolean;
+  /** same-level dynamics switched on per tier. Missing = all off. */
+  dyn?: Dynamics;
+  /** size bands [min, unstable) for organisms / herds. Missing = DEFAULT_ORG / DEFAULT_HERD. */
+  org?: readonly [number, number];
+  herd?: readonly [number, number];
+  /** number of loose cells at the start. Missing = P.freeCells. */
+  free?: number;
 }
+
+/** Per tier [cells, organisms, herds]: which same-level dynamics act at that level. */
+export interface Dynamics {
+  lock: readonly boolean[];
+  catalysis: readonly boolean[];
+  similar: readonly boolean[];
+}
+
+export const DEFAULT_ORG: readonly [number, number] = [5, 8];
+export const DEFAULT_HERD: readonly [number, number] = [3, 7];
+
+/**
+ * The fixed (deterministic) rules of the same-level dynamics, and their strengths per tier.
+ * Types are cell types (T0), species (T1) and herd kinds (T2); the same tables apply at every level.
+ */
+export const DYNAMICS = {
+  /** lock & key: unordered pairs of different types that bind (mint+violet / sky-blue+rose / kind 0+1) */
+  lockPairs: [[0, 1]] as readonly (readonly [number, number])[],
+  /** catalysis: [catalyst, target]: the target rotates while the catalyst touches it */
+  catalysis: [[0, 1]] as readonly (readonly [number, number])[],
+  /** bond spring strength / damping, per tier */
+  bondK: [60, 30, 8],
+  bondC: [6, 4, 2],
+  /** a free pair binds when closer than rA + rB + bindMargin */
+  bindMargin: [4, 8, 20],
+  /** "touching" for catalysis: closer than rA + rB + catMargin */
+  catMargin: [6, 12, 30],
+  /** catalysed spin, rad/s */
+  catSpin: [1.5, 1.2, 0.6],
+  /** similarity: like types attract, unlike repel (same kernel as the laws) */
+  simGain: [45, 18, 20],
+  /** health lost per second while a composite is outside its size band */
+  sizeDecay: 0.05,
+};
 
 /** One struct for every tier keeps hashing/serialisation trivial. Unused fields stay 0. */
 export interface Entity {
@@ -36,8 +79,10 @@ export interface Entity {
   signal: number;
   /** T1: mean stress of its cells (smoothed) */
   hormone: number;
-  /** T1: 0..1 */
+  /** T1/T2: 0..1 */
   health: number;
+  /** lock & key partner (free entities only), -1 = none */
+  bond: number;
   /** T2: packing of its organisms (1 = nominal) */
   density: number;
   /** T1/T2: which recipe realises this species / herd kind */
@@ -95,15 +140,18 @@ export type Action =
   | { kind: 'dragEnd'; id: number }
   | { kind: 'detach'; id: number }
   | { kind: 'join'; id: number; parent: number }
+  /** two free same-tier entities found a new parent one tier up: [target, dropped] */
+  | { kind: 'combine'; ids: [number, number] }
   | { kind: 'isolate'; id: number | null }
   | { kind: 'speed'; speed: number }
   | { kind: 'swap'; id: number };
 
 export type SimEvent =
-  | { kind: 'organism_death'; id: number; cause: 'health' | 'empty'; cells: number[] }
-  | { kind: 'herd_dissolved'; id: number }
+  | { kind: 'organism_death'; id: number; cause: 'health' | 'empty' | 'size'; cells: number[] }
+  | { kind: 'herd_dissolved'; id: number; cause?: 'size'; organisms?: number[] }
   | { kind: 'region_depleted'; index: number }
-  | { kind: 'swapped'; id: number; realisation: number; removed: number[]; added: number[] };
+  | { kind: 'swapped'; id: number; realisation: number; removed: number[]; added: number[] }
+  | { kind: 'founded'; id: number; tier: Tier; type: number; realisation: number; members: number[] };
 
 // ---------------------------------------------------------------- parameters
 
@@ -118,14 +166,12 @@ export const P = {
   nCellTypes: 3,
   nSpecies: 3,
   nHerdKinds: 2,
-  orgSize: [4, 7] as const,
-  herdSize: [3, 6] as const,
   nHerds: 5,
   nLoneOrganisms: 6,
-  targetCells: 175,
-  maxCells: 200,
-  minFreeCells: 15,
-  maxFreeCells: 70,
+  /** cap on cells inside organisms (generated herds + lone organisms) */
+  maxComposedCells: 185,
+  /** loose cells floating around at the start (SimConfig.free overrides) */
+  freeCells: 120,
   // same-tier interactions: [T0, T1, T2]
   rmin: [11, 58, 220],
   rmax: [45, 220, 800],
@@ -216,19 +262,32 @@ function recipe(r: RngState, n: number, dominant: number, kinds: number): number
   return out.sort((a, b) => a - b);
 }
 
-function makeGrammar(r: RngState): Grammar {
+/** Size band [min, unstable) of composites at this tier: outside it they drain and fall apart. */
+export function band(c: SimConfig, tier: Tier): readonly [number, number] {
+  return tier === 1 ? (c.org ?? DEFAULT_ORG) : (c.herd ?? DEFAULT_HERD);
+}
+
+/** Per-tier switch of a same-level dynamic. */
+function dynOn(c: SimConfig, kind: keyof Dynamics, tier: number): boolean {
+  return c.dyn?.[kind][tier] === true;
+}
+
+function makeGrammar(r: RngState, c: SimConfig): Grammar {
+  // recipes only use stable sizes
+  const [omin, ounst] = band(c, 1);
+  const [hmin, hunst] = band(c, 2);
   const species: number[][][] = [];
   for (let s = 0; s < P.nSpecies; s++) {
-    const r0 = recipe(r, randInt(r, P.orgSize[0], P.orgSize[1]), s, P.nCellTypes);
+    const r0 = recipe(r, randInt(r, omin, ounst - 1), s, P.nCellTypes);
     // second realisation: different dominant cell type, so it looks different but behaves the same
-    const r1 = recipe(r, randInt(r, P.orgSize[0], P.orgSize[1]), (s + 1) % P.nCellTypes, P.nCellTypes);
+    const r1 = recipe(r, randInt(r, omin, ounst - 1), (s + 1) % P.nCellTypes, P.nCellTypes);
     species.push([r0, r1]);
   }
   const herds: number[][][] = [];
   for (let k = 0; k < P.nHerdKinds; k++) {
     // the generated realisation is capped one below max so 5 herds stay within the cell budget
-    const r0 = recipe(r, randInt(r, P.herdSize[0], P.herdSize[1] - 1), k, P.nSpecies);
-    const r1 = recipe(r, randInt(r, P.herdSize[0] + 1, P.herdSize[1]), (k + 2) % P.nSpecies, P.nSpecies);
+    const r0 = recipe(r, randInt(r, hmin, Math.max(hmin, hunst - 2)), k, P.nSpecies);
+    const r1 = recipe(r, randInt(r, Math.min(hmin + 1, hunst - 1), hunst - 1), (k + 2) % P.nSpecies, P.nSpecies);
     herds.push([r0, r1]);
   }
   return { species, herds };
@@ -278,7 +337,8 @@ function newEntity(s: WorldState, tier: Tier, type: number, x: number, y: number
     stress: 0,
     signal: 0,
     hormone: 0,
-    health: tier === 1 ? 1 : 0,
+    health: tier > 0 ? 1 : 0,
+    bond: -1,
     density: tier === 2 ? 1 : 0,
     realisation: 0,
   };
@@ -338,7 +398,7 @@ function placeAwayFrom(r: RngState, pts: [number, number][], minD: number, margi
 
 export function createWorld(config: SimConfig): WorldState {
   const rng = makeRng(config.seed);
-  const grammar = makeGrammar(rng);
+  const grammar = makeGrammar(rng, config);
   const laws = makeLaws(rng);
   const s = emptyState(config, rng, grammar, laws);
 
@@ -356,10 +416,10 @@ export function createWorld(config: SimConfig): WorldState {
     const [x, y] = placeAwayFrom(rng, lonePts, 240, 80);
     lonePts.push([x, y]);
     const sp = randInt(rng, 0, P.nSpecies - 1);
-    if (countCells() + s.grammar.species[sp][0].length > P.maxCells - P.minFreeCells) continue;
+    if (countCells() + s.grammar.species[sp][0].length > P.maxComposedCells) continue;
     buildOrganism(s, sp, 0, x, y, rand(rng) * Math.PI * 2);
   }
-  const nFree = Math.max(P.minFreeCells, Math.min(P.maxFreeCells, P.targetCells - countCells()));
+  const nFree = config.free ?? P.freeCells;
   for (let i = 0; i < nFree; i++) {
     newEntity(s, 0, randInt(rng, 0, P.nCellTypes - 1), randRange(rng, 40, P.worldW - 40), randRange(rng, 40, P.worldH - 40));
   }
@@ -396,7 +456,14 @@ function removeChild(parent: Entity, childId: number): void {
   if (i >= 0) parent.children.splice(i, 1);
 }
 
+/** Break e's lock & key bond, if any. */
+function unbond(s: WorldState, e: Entity): void {
+  if (e.bond >= 0) s.entities[e.bond].bond = -1;
+  e.bond = -1;
+}
+
 function kill(s: WorldState, e: Entity): void {
+  unbond(s, e);
   e.alive = false;
   e.children = [];
   if (s.isolated === e.id) s.isolated = -1;
@@ -420,20 +487,32 @@ function unparent(s: WorldState, e: Entity, events: SimEvent[]): void {
   }
 }
 
-function dissolveOrganism(s: WorldState, o: Entity, events: SimEvent[]): void {
-  const cells = o.children.slice();
-  for (const c of cells) {
+/** Free a composite's members with an outward kick; returns their ids. */
+function releaseMembers(s: WorldState, p: Entity): number[] {
+  const members = p.children.slice();
+  for (const c of members) {
     const ce = s.entities[c];
     ce.parent = -1;
     ce.signal = 0;
-    const dx = ce.x - o.x;
-    const dy = ce.y - o.y;
+    const dx = ce.x - p.x;
+    const dy = ce.y - p.y;
     const d = dhypot(dx, dy) || 1;
     ce.vx += (dx / d) * 40;
     ce.vy += (dy / d) * 40;
   }
-  o.children = [];
-  events.push({ kind: 'organism_death', id: o.id, cause: 'health', cells });
+  p.children = [];
+  return members;
+}
+
+function dissolveHerd(s: WorldState, h: Entity, events: SimEvent[]): void {
+  const organisms = releaseMembers(s, h);
+  events.push({ kind: 'herd_dissolved', id: h.id, cause: 'size', organisms });
+  kill(s, h);
+}
+
+function dissolveOrganism(s: WorldState, o: Entity, cause: 'health' | 'size', events: SimEvent[]): void {
+  const cells = releaseMembers(s, o);
+  events.push({ kind: 'organism_death', id: o.id, cause, cells });
   unparent(s, o, events);
   kill(s, o);
 }
@@ -445,13 +524,20 @@ function translateTree(s: WorldState, id: number, dx: number, dy: number): void 
   for (const c of e.children) translateTree(s, c, dx, dy);
 }
 
+/** Drag translation: the entity's tree plus its bond partner's tree (a bound pair moves as one). */
+function translateHeld(s: WorldState, id: number, dx: number, dy: number): void {
+  translateTree(s, id, dx, dy);
+  const b = s.entities[id].bond;
+  if (b >= 0) translateTree(s, b, dx, dy);
+}
+
 export function canJoin(s: WorldState, childId: number, parentId: number): boolean {
   if (!s.config.hier) return false;
   const c = s.entities[childId];
   const p = s.entities[parentId];
   if (!c || !p || !c.alive || !p.alive || c.parent >= 0 || p.tier !== c.tier + 1) return false;
-  const max = p.tier === 1 ? P.orgSize[1] : P.herdSize[1];
-  if (p.children.length >= max) return false;
+  // joins are allowed up to the unstable size: over-filling makes the composite drain
+  if (p.children.length >= band(s.config, p.tier)[1]) return false;
   const recipes = p.tier === 1 ? s.grammar.species[p.type] : s.grammar.herds[p.type];
   return recipes.some((rc) => rc.includes(c.type));
 }
@@ -473,6 +559,85 @@ export function findJoinTarget(s: WorldState, id: number): number {
   return best;
 }
 
+/**
+ * Which species / herd kind (and recipe) a new parent of these member types would be, or null.
+ * A kind qualifies if every type appears in some recipe of it (the same test as canJoin); among those,
+ * the recipe covering the most of the types (counting repeats) wins, ties to the lowest kind then recipe.
+ */
+export function combineKind(s: WorldState, tier: Tier, types: readonly number[]): { type: number; realisation: number } | null {
+  if (tier >= 2) return null;
+  const kinds = tier === 0 ? s.grammar.species : s.grammar.herds;
+  let best: { type: number; realisation: number } | null = null;
+  let bestScore = -1;
+  for (let k = 0; k < kinds.length; k++) {
+    const recipes = kinds[k];
+    if (!types.every((t) => recipes.some((rc) => rc.includes(t)))) continue;
+    for (let r = 0; r < recipes.length; r++) {
+      const left = recipes[r].slice();
+      let score = 0;
+      for (const t of types) {
+        const i = left.indexOf(t);
+        if (i >= 0) {
+          left.splice(i, 1);
+          score++;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = { type: k, realisation: r };
+      }
+    }
+  }
+  return best;
+}
+
+export function canCombine(s: WorldState, aId: number, bId: number): boolean {
+  if (!s.config.hier || s.isolated >= 0 || aId === bId) return false;
+  const a = s.entities[aId];
+  const b = s.entities[bId];
+  if (!a || !b || !a.alive || !b.alive || a.parent >= 0 || b.parent >= 0) return false;
+  if (a.tier !== b.tier || a.tier >= 2) return false;
+  // where lock & key is on, dropping one half of a lock pair on the other binds them instead
+  if (dynOn(s.config, 'lock', a.tier) && isLockPair(a.type, b.type)) return false;
+  return combineKind(s, a.tier, [a.type, b.type]) !== null;
+}
+
+/** Nearest free same-tier entity the entity was dropped onto that it can combine with, or -1. */
+export function findCombineTarget(s: WorldState, id: number): number {
+  const c = s.entities[id];
+  if (!c || !c.alive || c.parent >= 0 || c.tier >= 2) return -1;
+  const rc = naturalRadius(s, c);
+  let best = -1;
+  let bestD = Infinity;
+  for (const o of s.entities) {
+    if (!o.alive || o.tier !== c.tier || !canCombine(s, o.id, id)) continue;
+    const d = dhypot(o.x - c.x, o.y - c.y);
+    if (d < rc + naturalRadius(s, o) + P.joinMargin && d < bestD) {
+      best = o.id;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+function foundParent(s: WorldState, a: Entity, b: Entity, events: SimEvent[]): void {
+  const kind = combineKind(s, a.tier, [a.type, b.type]);
+  if (!kind) return;
+  const tier = (a.tier + 1) as Tier;
+  const p = newEntity(s, tier, kind.type, (a.x + b.x) / 2, (a.y + b.y) / 2);
+  p.vx = (a.vx + b.vx) / 2;
+  p.vy = (a.vy + b.vy) / 2;
+  p.angle = rand(s.rng) * Math.PI * 2;
+  p.realisation = kind.realisation;
+  unbond(s, a);
+  unbond(s, b);
+  adopt(p, a);
+  adopt(p, b);
+  a.signal = 0;
+  b.signal = 0;
+  events.push({ kind: 'founded', id: p.id, tier, type: p.type, realisation: p.realisation, members: [a.id, b.id] });
+}
+
 function swapRealisation(s: WorldState, e: Entity, events: SimEvent[]): void {
   if (!s.config.hier || e.tier === 0) return;
   const removed = descendants(s, e.id);
@@ -492,6 +657,19 @@ function swapRealisation(s: WorldState, e: Entity, events: SimEvent[]): void {
   events.push({ kind: 'swapped', id: e.id, realisation: e.realisation, removed, added });
 }
 
+function isLockPair(a: number, b: number): boolean {
+  return DYNAMICS.lockPairs.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+}
+
+function catalyses(catalyst: number, target: number): boolean {
+  return DYNAMICS.catalysis.some(([c, t]) => c === catalyst && t === target);
+}
+
+function outsideBand(s: WorldState, e: Entity): boolean {
+  const [min, unstable] = band(s.config, e.tier);
+  return e.children.length < min || e.children.length >= unstable;
+}
+
 function validId(s: WorldState, id: number | null | undefined): id is number {
   return typeof id === 'number' && id >= 0 && id < s.entities.length && s.entities[id].alive;
 }
@@ -504,7 +682,7 @@ export function applyAction(s: WorldState, a: Action): SimEvent[] {
       if (!validId(s, a.id)) break;
       s.drag = { id: a.id, x: a.x, y: a.y };
       const e = s.entities[a.id];
-      translateTree(s, a.id, a.x - e.x, a.y - e.y);
+      translateHeld(s, a.id, a.x - e.x, a.y - e.y);
       e.vx = 0;
       e.vy = 0;
       break;
@@ -514,21 +692,31 @@ export function applyAction(s: WorldState, a: Action): SimEvent[] {
       s.drag.x = a.x;
       s.drag.y = a.y;
       const e = s.entities[a.id];
-      translateTree(s, a.id, a.x - e.x, a.y - e.y);
+      translateHeld(s, a.id, a.x - e.x, a.y - e.y);
       break;
     }
     case 'dragEnd':
       if (s.drag && s.drag.id === a.id) s.drag = null;
       break;
     case 'detach':
-      if (validId(s, a.id)) unparent(s, s.entities[a.id], events);
+      // Shift-drag: out of its parent and off its bond partner
+      if (validId(s, a.id)) {
+        unbond(s, s.entities[a.id]);
+        unparent(s, s.entities[a.id], events);
+      }
       break;
     case 'join':
       if (canJoin(s, a.id, a.parent)) {
+        unbond(s, s.entities[a.id]);
         s.entities[a.id].parent = a.parent;
         s.entities[a.parent].children.push(a.id);
       }
       break;
+    case 'combine': {
+      const [x, y] = a.ids;
+      if (canCombine(s, x, y)) foundParent(s, s.entities[x], s.entities[y], events);
+      break;
+    }
     case 'isolate':
       s.isolated = validId(s, a.id) ? a.id : -1;
       break;
@@ -554,6 +742,7 @@ export function step(s: WorldState, actions: readonly Action[] = []): SimEvent[]
 
 function advance(s: WorldState, events: SimEvent[]): void {
   const { hier, eps } = s.config;
+  const drift = s.config.move !== false;
   const ents = s.entities;
   const n = ents.length;
   const active = isActiveSet(s);
@@ -564,6 +753,37 @@ function advance(s: WorldState, events: SimEvent[]): void {
 
   const byTier: Entity[][] = [[], [], []];
   for (const e of ents) if (on(e)) byTier[e.tier].push(e);
+
+  // natural radii (contact distances for lock & key and catalysis)
+  const rad = new Float64Array(n);
+  for (const e of ents) if (on(e)) rad[e.id] = naturalRadius(s, e);
+  // the dragged entity and its bond partner are held by the pointer
+  const held = new Uint8Array(n);
+  if (s.drag && ents[s.drag.id].alive) {
+    held[s.drag.id] = 1;
+    if (ents[s.drag.id].bond >= 0) held[ents[s.drag.id].bond] = 1;
+  }
+
+  // 0. lock & key: free, unbonded lock-pair entities in contact bind (ascending id order, first match wins)
+  for (let t = 0; t < 3; t++) {
+    if (!dynOn(s.config, 'lock', t)) continue;
+    const list = byTier[t];
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (a.parent >= 0 || a.bond >= 0 || held[a.id]) continue;
+      for (let j = i + 1; j < list.length; j++) {
+        const b = list[j];
+        if (b.parent >= 0 || b.bond >= 0 || held[b.id] || !isLockPair(a.type, b.type)) continue;
+        if (dhypot(b.x - a.x, b.y - a.y) < rad[a.id] + rad[b.id] + DYNAMICS.bindMargin[t]) {
+          a.bond = b.id;
+          b.bond = a.id;
+          break;
+        }
+      }
+    }
+  }
+  // catalysed spin rate per entity (strongest catalyst in contact wins)
+  const catSpin = new Float64Array(n);
 
   // 1. same-tier interactions (+ crowding for cells)
   for (let t = 0; t < 3; t++) {
@@ -589,7 +809,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
           const rep = -P.repel[t] * (1 - d / rmin);
           fa += rep;
           fb += rep;
-        } else {
+        } else if (drift) {
           // siblings interact fully; non-siblings at the same tier leak through eps.
           // A free cell sits in no unit, so there is no boundary to leak across: it feels everything.
           const free = t === 0 && (a.parent < 0 || b.parent < 0);
@@ -597,6 +817,20 @@ function advance(s: WorldState, events: SimEvent[]): void {
           const tri = 1 - Math.abs(2 * d - rmax - rmin) / (rmax - rmin);
           fa += P.gain[t] * K[a.type][b.type] * tri * w;
           fb += P.gain[t] * K[b.type][a.type] * tri * w;
+          if (dynOn(s.config, 'similar', t) && !(dynOn(s.config, 'lock', t) && isLockPair(a.type, b.type))) {
+            // birds of a feather: like types attract, unlike types repel (lock pairs are exempt: they fit)
+            const sim = DYNAMICS.simGain[t] * (a.type === b.type ? 1 : -1) * tri * w;
+            fa += sim;
+            fb += sim;
+          }
+        }
+        if (dynOn(s.config, 'catalysis', t) && d < rad[a.id] + rad[b.id] + DYNAMICS.catMargin[t]) {
+          // catalysis: a touching catalyst makes its target rotate (same sibling/eps weighting as the laws)
+          const free = t === 0 && (a.parent < 0 || b.parent < 0);
+          const w = !hier || free || a.parent === b.parent ? 1 : eps;
+          const rate = DYNAMICS.catSpin[t] * w;
+          if (catalyses(a.type, b.type)) catSpin[b.id] = Math.max(catSpin[b.id], rate);
+          if (catalyses(b.type, a.type)) catSpin[a.id] = Math.max(catSpin[a.id], rate);
         }
         if (t === 0) {
           if (d < P.stressR && (a.parent < 0 || a.parent !== b.parent)) {
@@ -604,7 +838,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
             crowd[a.id] += c;
             crowd[b.id] += c;
           }
-          if (hier && d < P.stressRepelR) {
+          if (hier && drift && d < P.stressRepelR) {
             // stressed cells (high hormone signal) become slightly repulsive
             const k = 1 - d / P.stressRepelR;
             const ea = Math.max(0, a.signal - P.hormoneThr);
@@ -640,7 +874,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
       }
       c.signal = Math.max(0, ents[c.parent].hormone + gauss(s.rng) * P.hormoneNoise);
       const ex = c.signal - P.hormoneThr;
-      if (ex > 0) {
+      if (drift && ex > 0) {
         fx[c.id] += gauss(s.rng) * P.jitter * ex;
         fy[c.id] += gauss(s.rng) * P.jitter * ex;
       }
@@ -675,6 +909,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
       }
       const h = ents[o.parent];
       o.signal = Math.max(0, h.density + gauss(s.rng) * P.densityNoise);
+      if (!drift) continue;
       const dx = o.x - h.x;
       const dy = o.y - h.y;
       const d = dhypot(dx, dy) || 1;
@@ -698,15 +933,32 @@ function advance(s: WorldState, events: SimEvent[]): void {
     fy[p.id] -= eps * Fy;
   }
 
+  // 4b. lock & key bonds: a spring holds each bound pair touching
+  for (const a of ents) {
+    if (!on(a) || a.bond < a.id) continue; // each pair once, from its lower id
+    const b = ents[a.bond];
+    if (!on(b)) continue;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const d = dhypot(dx, dy) || 1e-6;
+    const ext = d - (rad[a.id] + rad[b.id]);
+    const Fx = DYNAMICS.bondK[a.tier] * ext * (dx / d) + DYNAMICS.bondC[a.tier] * (b.vx - a.vx);
+    const Fy = DYNAMICS.bondK[a.tier] * ext * (dy / d) + DYNAMICS.bondC[a.tier] * (b.vy - a.vy);
+    fx[a.id] += Fx;
+    fy[a.id] += Fy;
+    fx[b.id] -= Fx;
+    fy[b.id] -= Fy;
+  }
+
   // 5. self-propulsion of free composites, noise for free cells, soft walls
   for (const e of ents) {
     if (!on(e)) continue;
-    if (e.parent < 0 && e.tier > 0) {
+    if (drift && e.parent < 0 && e.tier > 0) {
       const c = e.tier === 1 ? s.laws.cruise1[e.type] : s.laws.cruise2[e.type];
       fx[e.id] += c * dcos(e.angle);
       fy[e.id] += c * dsin(e.angle);
     }
-    if (e.tier === 0 && e.parent < 0) {
+    if (drift && e.tier === 0 && e.parent < 0) {
       const nz = hier ? P.freeNoise : P.flatNoise;
       fx[e.id] += gauss(s.rng) * nz;
       fy[e.id] += gauss(s.rng) * nz;
@@ -721,10 +973,10 @@ function advance(s: WorldState, events: SimEvent[]): void {
   }
 
   // 6. integrate (all tiers at the same fixed rate)
-  const dragId = s.drag ? s.drag.id : -1;
   for (const e of ents) {
     if (!on(e)) continue;
-    if (e.id === dragId) {
+    e.angle += catSpin[e.id] * P.dt;
+    if (held[e.id]) {
       e.vx = 0;
       e.vy = 0;
       continue;
@@ -738,18 +990,26 @@ function advance(s: WorldState, events: SimEvent[]): void {
     }
     e.x += e.vx * P.dt;
     e.y += e.vy * P.dt;
-    if (e.tier === 1) e.angle += s.laws.spin1[e.type] * P.dt;
-    if (e.tier === 2) e.angle += s.laws.spin2[e.type] * P.dt;
+    if (drift && e.tier === 1) e.angle += s.laws.spin1[e.type] * P.dt;
+    if (drift && e.tier === 2) e.angle += s.laws.spin2[e.type] * P.dt;
   }
 
-  // 7. light goal: organism health
+  // 7. light goal: organism health, plus the size band of organisms and herds
   if (hier) {
     for (const o of byTier[1]) {
       if (!o.alive) continue;
       const ex = o.hormone - P.hormoneThr;
-      o.health = ex > 0 ? o.health - P.healthDecay * ex * P.dt : o.health + P.healthRecover * P.dt;
-      o.health = Math.min(1, Math.max(0, o.health));
-      if (o.health <= 0) dissolveOrganism(s, o, events);
+      const out = outsideBand(s, o);
+      let dh = ex > 0 ? -P.healthDecay * ex : out ? 0 : P.healthRecover;
+      if (out) dh -= DYNAMICS.sizeDecay;
+      o.health = Math.min(1, Math.max(0, o.health + dh * P.dt));
+      if (o.health <= 0) dissolveOrganism(s, o, out ? 'size' : 'health', events);
+    }
+    for (const h of byTier[2]) {
+      if (!h.alive) continue;
+      const out = outsideBand(s, h);
+      h.health = Math.min(1, Math.max(0, h.health + (out ? -DYNAMICS.sizeDecay : P.healthRecover) * P.dt));
+      if (h.health <= 0) dissolveHerd(s, h, events);
     }
   } else {
     // region "stress" = crowding: cells inside relative to the count expected from uniform spread

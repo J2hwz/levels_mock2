@@ -73,6 +73,9 @@ export class ControlsLegend {
 
   constructor(
     private readonly debug: boolean,
+    private readonly reveal: boolean,
+    /** lock & key is on somewhere: some loose pairs stick together instead of combining */
+    private readonly sticks: boolean,
     private readonly onToggle: (open: boolean) => void,
   ) {
     this.render();
@@ -105,13 +108,14 @@ export class ControlsLegend {
     this.el.replaceChildren(
       h('div', { class: 'row' }, h('b', { class: 'grow' }, 'Controls'), toggle),
       h('table', {},
-        row(['Hover'], 'highlight'),
+        row(['Hover'], this.reveal ? 'highlight and look inside' : 'highlight'),
         row(['Click'], 'select'),
         row(['Click again'], 'select what it is part of'),
         row(['Esc'], 'clear selection'),
         row(['Drag'], 'move the selected thing'),
-        row(['Shift', 'Drag'], 'pull it out of what it is in'),
+        row(['Shift', 'Drag'], 'pull it out of what it is in, or off what it is stuck to'),
         row(['Drop'], 'loose thing joins what it lands on'),
+        row(['Drop on a loose one'], this.sticks ? 'the two combine into something new, or stick together' : 'the two combine into something new'),
         row(['I'], this.isolated ? 'unfreeze everything (frozen now)' : 'freeze everything except selection', this.isolated),
         row(['Scroll'], 'zoom'),
         row(['Drag background'], 'move around'),

@@ -7,7 +7,7 @@
 
 import type { SizeMode } from '../config';
 import { hash01 } from '../sim/rng';
-import { type Entity, type WorldState, naturalRadius } from '../sim/world';
+import { type Entity, type WorldState, ancestors, naturalRadius } from '../sim/world';
 
 export const IRRELEVANT_RANGE: readonly [number, number] = [6, 56];
 
@@ -83,4 +83,15 @@ export function hitChain(s: WorldState, layout: Layout, wx: number, wy: number, 
     p = s.entities[p].parent;
   }
   return chain;
+}
+
+/** Top-level ancestor (or itself, if free-standing) of each live id. Used to open composites on hover. */
+export function openRoots(s: WorldState, ids: readonly number[]): Set<number> {
+  const out = new Set<number>();
+  for (const id of ids) {
+    if (id < 0 || !s.entities[id]?.alive) continue;
+    const up = ancestors(s, id);
+    out.add(up.length ? up[up.length - 1] : id);
+  }
+  return out;
 }

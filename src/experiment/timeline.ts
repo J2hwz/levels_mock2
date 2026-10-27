@@ -40,7 +40,7 @@ export function run(cfg: Config): JsPsych {
     pages: [
       `<div class="prose"><h2>Looking around</h2>
         <ul>
-          <li><b>Hover</b> over something to highlight it. <b>Click</b> to select it.</li>
+          <li><b>Hover</b> over something to highlight it${cfg.reveal ? ' and see what is inside it' : ''}. <b>Click</b> to select it.</li>
           <li><b>Click again</b> on the same spot to select something bigger that it is part of.</li>
           <li><b>Esc</b> clears the selection.</li>
           <li><b>Scroll</b> to zoom. <b>Drag the background</b> to move around.</li>
@@ -49,8 +49,8 @@ export function run(cfg: Config): JsPsych {
       `<div class="prose"><h2>Doing things</h2>
         <ul>
           <li><b>Drag</b> a selected thing to move it.</li>
-          <li><b>Shift + drag</b> a selected thing to pull it out of whatever it is in.</li>
-          <li><b>Drop</b> a loose thing onto something else and it may join it.</li>
+          <li><b>Shift + drag</b> a selected thing to pull it out of whatever it is in, or off whatever it is stuck to.</li>
+          <li><b>Drop</b> a loose thing onto something else and it may join it, or combine with it into something new.</li>
           <li>Press <b>I</b> to freeze everything except the selected thing. Press I again to unfreeze.</li>
         </ul></div>`,
       `<div class="prose"><h2>Your first task</h2>

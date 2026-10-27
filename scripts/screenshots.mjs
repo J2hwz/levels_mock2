@@ -77,6 +77,54 @@ for (const hier of [1, 0]) {
   await page.close();
 }
 
+// same-level dynamics on at every level, contents always shown so bonds and spinning cells are visible
+{
+  const page = await openSandbox('?seed=42&debug=1&short=1&reveal=0&lock=all&catalysis=all&similar=all');
+  await page.waitForTimeout(8000);
+  await page.screenshot({ path: `${OUT}/hier1_dynamics.png` });
+  // drop a loose mint cell onto the nearest loose violet one: they should bind (lock & key)
+  await page.locator('[data-speed="0"]').click();
+  const pair = await page.evaluate(() => {
+    const sb = window.__sandbox;
+    const free = sb.state.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0 && e.bond < 0);
+    let best = null;
+    for (const a of free.filter((e) => e.type === 0)) {
+      for (const b of free.filter((e) => e.type === 1)) {
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (!best || d < best.d) best = { a: a.id, b: b.id, d };
+      }
+    }
+    const a = sb.state.entities[best.a];
+    const b = sb.state.entities[best.b];
+    sb.camera.x = (a.x + b.x) / 2;
+    sb.camera.y = (a.y + b.y) / 2;
+    sb.camera.zoom = Math.min(5, 500 / Math.max(best.d, 50));
+    return best;
+  });
+  await page.waitForTimeout(200);
+  let [x, y] = await screenPos(page, pair.a);
+  await page.mouse.click(x, y);
+  const [bx, by] = await screenPos(page, pair.b);
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(x + ((bx - x) * i) / 10, y + ((by - y) * i) / 10);
+  await page.mouse.up();
+  await page.locator('[data-speed="1"]').click();
+  await page.waitForTimeout(1500);
+  const bond = await page.evaluate((id) => window.__sandbox.state.entities[id].bond, pair.a);
+  console.log(`${OUT}/hier1_dynamics_zoom.png: dropped mint #${pair.a} on violet #${pair.b} -> bond ${bond}`);
+  await page.evaluate((id) => {
+    const sb = window.__sandbox;
+    const e = sb.state.entities[id];
+    sb.camera.x = e.x;
+    sb.camera.y = e.y;
+    sb.camera.zoom = 5;
+  }, pair.a);
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${OUT}/hier1_dynamics_zoom.png` });
+  await page.close();
+}
+
 // ---- 2. full run-through (hier=1, proxy) through every phase, then download the log
 {
   const page = await openSandbox('?hier=1&size=proxy&seed=7&debug=1&short=1');
@@ -98,7 +146,8 @@ for (const hier of [1, 0]) {
   await page.locator('[data-speed="0"]').click();
   await page.waitForTimeout(200);
 
-  const sel = () => page.evaluate(() => document.querySelector('.inspect')?.textContent ?? '');
+  // the inspect panel redraws on the next frame: wait for it before reading
+  const sel = async () => (await page.waitForTimeout(100), page.evaluate(() => document.querySelector('.inspect')?.textContent ?? ''));
   let [x, y] = await screenPos(page, ids.cell);
   await page.mouse.click(x, y);
   const s1 = await sel();
@@ -143,6 +192,47 @@ for (const hier of [1, 0]) {
   await page.mouse.up();
   const rejoined = await page.evaluate((id) => window.__sandbox.state.entities[id].parent, ids.cell2);
   console.log('drop re-joined cell parent =', rejoined, '(organism', ids.org + ')');
+
+  // drop one loose cell onto another: they combine into a new organism
+  const pair = await page.evaluate(() => {
+    const sb = window.__sandbox;
+    const s = sb.state;
+    const fits = (a, b) => s.grammar.species.some((rs) => [a, b].every((t) => rs.some((rc) => rc.includes(t))));
+    const free = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0);
+    const others = s.entities.filter((e) => e.alive && e.tier > 0);
+    let best = null;
+    for (const a of free) {
+      for (const b of free) {
+        if (a.id >= b.id || !fits(a.type, b.type)) continue;
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        if (others.some((o) => Math.hypot(o.x - mx, o.y - my) < 250)) continue;
+        if (!best || d < best.d) best = { a: a.id, b: b.id, d, mx, my };
+      }
+    }
+    sb.camera.x = best.mx;
+    sb.camera.y = best.my;
+    sb.camera.zoom = Math.min(3, 600 / Math.max(best.d, 50));
+    return best;
+  });
+  await page.waitForTimeout(200);
+  [x, y] = await screenPos(page, pair.b);
+  await page.mouse.click(x, y);
+  const [bx, by] = await screenPos(page, pair.a);
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(x + ((bx - x) * i) / 10, y + ((by - y) * i) / 10);
+  await page.mouse.up();
+  const founded = await page.evaluate(({ a, b }) => {
+    const s = window.__sandbox.state;
+    const p = s.entities[a].parent;
+    return p >= 0 && s.entities[b].parent === p ? { id: p, tier: s.entities[p].tier, children: s.entities[p].children } : null;
+  }, pair);
+  console.log('drop combined two loose cells into', founded);
+  await page.locator('[data-speed="1"]').click();
+  await page.waitForTimeout(1000);
+  await page.screenshot({ path: `${OUT}/runthrough_1b_combine.png` });
 
   // isolate, wheel zoom, pan, speeds
   await page.keyboard.press('i');
