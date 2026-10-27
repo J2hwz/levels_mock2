@@ -14,6 +14,12 @@ export interface SimConfig {
   seed: number;
   /** false = still world: no self-propulsion, laws, noise or spin; only springs, contact and walls. Missing = true. */
   move?: boolean;
+  /**
+   * false = no laws: interaction matrices, self-propulsion and turning are zeroed, and every free-standing
+   * entity (not just free cells) random-walks. Contact, springs, downward causation and `dyn` still apply.
+   * Missing = true.
+   */
+  laws?: boolean;
   /** same-level dynamics switched on per tier. Missing = all off. */
   dyn?: Dynamics;
   /** size bands [min, unstable) for organisms / herds. Missing = DEFAULT_ORG / DEFAULT_HERD. */
@@ -321,6 +327,21 @@ function makeLaws(r: RngState): Laws {
   };
 }
 
+/** The same laws with every matrix entry, cruise speed and turning rate set to 0. */
+function lawless(l: Laws): Laws {
+  const zero = (m: number[][]) => m.map((row) => row.map(() => 0));
+  return {
+    K0: zero(l.K0),
+    K1: zero(l.K1),
+    K2: zero(l.K2),
+    Kflat: zero(l.Kflat),
+    cruise1: l.cruise1.map(() => 0),
+    cruise2: l.cruise2.map(() => 0),
+    spin1: l.spin1.map(() => 0),
+    spin2: l.spin2.map(() => 0),
+  };
+}
+
 function newEntity(s: WorldState, tier: Tier, type: number, x: number, y: number): Entity {
   const e: Entity = {
     id: s.nextId++,
@@ -399,7 +420,8 @@ function placeAwayFrom(r: RngState, pts: [number, number][], minD: number, margi
 export function createWorld(config: SimConfig): WorldState {
   const rng = makeRng(config.seed);
   const grammar = makeGrammar(rng, config);
-  const laws = makeLaws(rng);
+  // laws are always drawn (so the rng stream, and thus the generated world, is the same either way), then zeroed
+  const laws = config.laws === false ? lawless(makeLaws(rng)) : makeLaws(rng);
   const s = emptyState(config, rng, grammar, laws);
 
   // Always generate the hierarchical world first, so the flat condition gets the same cells.
@@ -958,7 +980,8 @@ function advance(s: WorldState, events: SimEvent[]): void {
       fx[e.id] += c * dcos(e.angle);
       fy[e.id] += c * dsin(e.angle);
     }
-    if (drift && e.tier === 0 && e.parent < 0) {
+    // random walk: free cells always; with laws off, every free-standing entity
+    if (drift && e.parent < 0 && (e.tier === 0 || s.config.laws === false)) {
       const nz = hier ? P.freeNoise : P.flatNoise;
       fx[e.id] += gauss(s.rng) * nz;
       fy[e.id] += gauss(s.rng) * nz;

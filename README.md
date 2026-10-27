@@ -32,6 +32,7 @@ Quick test link: `http://localhost:5173/?seed=42&short=1&debug=1`
 | `seed`  | integer                   | random     | world seed (the random default is logged in the header) |
 | `eps`   | 0..1                      | `0.05`     | cross-unit leakage |
 | `move`  | `1` \| `0`                | `1`        | `1`: things drift (self-propulsion, laws, noise). `0`: still world, nothing moves unless dragged |
+| `laws`  | `1` \| `0`                | `1`        | `0`: no laws. The interaction matrices, swimming and turning are zeroed, and every free-standing cell, organism and herd random-walks. Contact, springs, downward causation and `lock`/`catalysis`/`similar` still apply. The starting world is identical to `laws=1` for the same seed |
 | `reveal`| `1` \| `0`                | `1`        | `1`: organisms and herds show only their colour until hovered. `0`: contents always visible |
 | `lock`  | levels, e.g. `0,1` \| `all` | none      | lock & key at these levels (`0` cells, `1` membranes/organisms, `2` hazes/herds) |
 | `catalysis` | levels                | none       | catalysis at these levels |

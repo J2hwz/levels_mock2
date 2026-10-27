@@ -40,7 +40,7 @@ describe('determinism', () => {
 });
 
 describe('replay', () => {
-  it.each(['?seed=42', '?seed=42&move=0', '?seed=5&hier=0', '?seed=9&eps=0.3&size=irrelevant', '?seed=42&lock=all&catalysis=all&similar=all', '?seed=5&hier=0&lock=0&catalysis=0&similar=0'])(
+  it.each(['?seed=42', '?seed=42&move=0', '?seed=42&laws=0', '?seed=5&hier=0', '?seed=9&eps=0.3&size=irrelevant', '?seed=42&lock=all&catalysis=all&similar=all', '?seed=5&hier=0&lock=0&catalysis=0&similar=0'])(
     'replays a recorded log (%s) to the logged final hash',
     (q) => {
       const session = testSession(q);
@@ -267,6 +267,44 @@ describe('still world (move=0)', () => {
       return hashWorld(s);
     };
     expect(go()).toBe(go());
+  });
+});
+
+// ---------------------------------------------------------------- laws off
+
+describe('laws=0', () => {
+  const world = (laws: boolean) => createWorld({ hier: true, eps: 0.05, seed: 42, laws });
+
+  it('generates exactly the same starting world as laws=1', () => {
+    expect(hashWorld(world(false))).toBe(hashWorld(world(true)));
+  });
+
+  it('zeroes every matrix, swimming speed and turning rate', () => {
+    const l = world(false).laws;
+    for (const m of [l.K0, l.K1, l.K2, l.Kflat]) expect(m.flat().every((v) => v === 0)).toBe(true);
+    for (const v of [l.cruise1, l.cruise2, l.spin1, l.spin2]) expect(v.every((x) => x === 0)).toBe(true);
+  });
+
+  it('movement no longer depends on type: relabelling free cells changes nothing', () => {
+    const run = (laws: boolean, relabel: boolean) => {
+      const s = world(laws);
+      if (relabel) for (const e of s.entities) if (e.tier === 0 && e.parent < 0) e.type = (e.type + 1) % 3;
+      for (let i = 0; i < 300; i++) step(s, []);
+      return s.entities.map((e) => [e.x, e.y]);
+    };
+    expect(run(false, true)).toEqual(run(false, false));
+    expect(run(true, true)).not.toEqual(run(true, false)); // with laws, type matters
+  });
+
+  it('free organisms and herds random-walk instead of swimming and turning', () => {
+    const s = world(false);
+    const free = s.entities.filter((e) => e.alive && e.tier > 0 && e.parent < 0);
+    const start = free.map((e) => ({ x: e.x, y: e.y, angle: e.angle }));
+    for (let i = 0; i < 300; i++) step(s, []);
+    free.forEach((e, i) => {
+      expect(e.angle).toBe(start[i].angle);
+      expect(Math.hypot(e.x - start[i].x, e.y - start[i].y)).toBeGreaterThan(1);
+    });
   });
 });
 
