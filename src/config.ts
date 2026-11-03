@@ -1,6 +1,6 @@
 // All experiment dials + URL-param parsing.
 // ?hier=1|0&size=proxy|irrelevant&skin=biology|abstract&seed=42&eps=0.05&move=1|0&laws=1|0&wander=1&reveal=1|0
-//  &lock=1|0&catalysis=1|0&similar=0,1,2|all&org=5-8&herd=3-7&free=120&short=1&debug=1
+//  &lock=1|0&catalysis=1|0&similar=0,1,2|all&org=5-8&herd=3-7&free=140&herds=7&lone=18&same=0|1&short=1&debug=1
 
 import type { Dynamics, SimConfig } from './sim/world';
 
@@ -32,6 +32,11 @@ export interface Config {
   herd: [number, number];
   /** loose cells floating around at the start */
   free: number;
+  /** herds (hazes) and lone organisms (membranes) at the start */
+  herds: number;
+  lone: number;
+  /** same-colour cells may attract each other through the seed-drawn laws */
+  same: boolean;
   short: boolean;
   debug: boolean;
   /** duration of the Explore phase */
@@ -40,13 +45,21 @@ export interface Config {
   seedFromUrl: boolean;
 }
 
+// =====================================================================================================
+// TUNE: the app's defaults. Each can be overridden for one run in the URL (see README "URL parameters").
+//   mechanisms on/off ... laws, same, lock, catalysis (similar: see parseConfig, `levels(q.get('similar'))`)
+//   movement ........... move, wander
+//   size bands ......... org, herd
+//   starting world ..... free, herds, lone
+// Strengths and exact pairs are in src/sim/world.ts: DYNAMICS, PAIR_RULES and P.
+// =====================================================================================================
 export const DEFAULTS = {
   hier: true,
   size: 'proxy' as SizeMode,
   skin: 'biology' as Skin,
   eps: 0.05,
   move: true,
-  laws: true,
+  laws: false,
   wander: 1,
   reveal: true,
   lock: true,
@@ -54,9 +67,18 @@ export const DEFAULTS = {
   org: [5, 8] as [number, number],
   herd: [3, 7] as [number, number],
   free: 140,
+  herds: 7,
+  lone: 18,
+  same: false,
   exploreMs: 6 * 60 * 1000,
   shortExploreMs: 60 * 1000,
 };
+
+/** whole number in [lo, hi], else the default */
+function count(v: string | null, dflt: number, lo: number, hi: number): number {
+  const x = v === null ? NaN : Number(v);
+  return Number.isFinite(x) ? Math.min(hi, Math.max(lo, Math.floor(x))) : dflt;
+}
 
 function bool(v: string | null, dflt: boolean): boolean {
   if (v === null) return dflt;
@@ -115,7 +137,10 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
     similar: levels(q.get('similar')),
     org: band(q.get('org'), DEFAULTS.org),
     herd: band(q.get('herd'), DEFAULTS.herd),
-    free: q.get('free') !== null && Number.isFinite(Number(q.get('free'))) ? Math.min(600, Math.max(0, Math.floor(Number(q.get('free'))))) : DEFAULTS.free,
+    free: count(q.get('free'), DEFAULTS.free, 0, 600),
+    herds: count(q.get('herds'), DEFAULTS.herds, 0, 12),
+    lone: count(q.get('lone'), DEFAULTS.lone, 0, 40),
+    same: bool(q.get('same'), DEFAULTS.same),
     short,
     debug: bool(q.get('debug'), false),
     exploreMs: short ? DEFAULTS.shortExploreMs : DEFAULTS.exploreMs,
@@ -125,5 +150,5 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
 
 export function simConfigOf(c: Pick<Config, 'hier' | 'eps' | 'seed'> & Partial<Config>): SimConfig {
   const dyn: Dynamics = { lock: c.lock ?? DEFAULTS.lock, catalysis: c.catalysis ?? DEFAULTS.catalysis, similar: c.similar ?? [false, false, false] };
-  return { hier: c.hier, eps: c.eps, seed: c.seed, move: c.move ?? true, laws: c.laws ?? true, wander: c.wander ?? DEFAULTS.wander, dyn, org: c.org ?? DEFAULTS.org, herd: c.herd ?? DEFAULTS.herd, free: c.free ?? DEFAULTS.free };
+  return { hier: c.hier, eps: c.eps, seed: c.seed, move: c.move ?? true, laws: c.laws ?? true, wander: c.wander ?? DEFAULTS.wander, dyn, org: c.org ?? DEFAULTS.org, herd: c.herd ?? DEFAULTS.herd, free: c.free ?? DEFAULTS.free, herds: c.herds ?? DEFAULTS.herds, lone: c.lone ?? DEFAULTS.lone, sameAttract: c.same ?? true };
 }

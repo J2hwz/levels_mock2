@@ -29,6 +29,11 @@ export interface SimConfig {
   herd?: readonly [number, number];
   /** number of loose cells at the start. Missing = P.freeCells. */
   free?: number;
+  /** number of herds / lone organisms at the start. Missing = P.nHerds / P.nLoneOrganisms. */
+  herds?: number;
+  lone?: number;
+  /** false = same-type cells never attract through the laws (positive diagonal of K0 set to 0). Missing = true. */
+  sameAttract?: boolean;
 }
 
 /**
@@ -43,6 +48,12 @@ export interface Dynamics {
 
 export const DEFAULT_ORG: readonly [number, number] = [5, 8];
 export const DEFAULT_HERD: readonly [number, number] = [3, 7];
+
+// =====================================================================================================
+// TUNE: within-level mechanisms. Which pairs bind / catalyse, and how strong every mechanism is.
+// Switch mechanisms on/off in DEFAULTS (src/config.ts) or the URL. See README "Tuning the interactions".
+// Types: cells 0 mint, 1 violet, 2 amber · organisms 0 sky-blue, 1 rose, 2 lime · herds 0 pale-blue, 1 pale-pink
+// =====================================================================================================
 
 /**
  * The fixed (deterministic) rules of the same-level dynamics, and their strengths per tier.
@@ -66,6 +77,10 @@ export const DYNAMICS = {
   lockRepelR: 30,
   /** ... with this strength at contact, fading to 0 at the range (collision is 600, laws <= 150) */
   lockRepel: 100,
+  /** before binding: a free mint and a free violet within this range pull gently toward each other ... */
+  lockAttractR: 40,
+  /** ... with this strength at contact, fading to 0 at the range (free-cell noise 30, laws <= 150) */
+  lockAttract: 50,
   /** "touching" for catalysis: closer than rA + rB + catMargin */
   catMargin: 12,
   /** catalysed spin, rad/s (~1 turn per 2 s) */
@@ -82,6 +97,45 @@ export const DYNAMICS = {
   simGain: [45, 18, 20],
   /** health lost per second while a composite is outside its size band */
   sizeDecay: 0.05,
+};
+
+/**
+ * TUNE: exactly which elements within a level interact, per level [cells, organisms, herds].
+ *
+ * laws[level][i][j]: how strongly type i is pulled toward type j (row = the one that moves, column = the one it
+ *   reacts to). null = drawn by the seed (default). A number in -1..1 fixes it: + attract, - repel, 0 no interaction.
+ *   It is multiplied by P.gain[level]. Applied after `same=0`, so an explicit entry wins; ignored when `laws=0`;
+ *   the flat condition keeps its all-zero laws.
+ * similarTypes[level]: types that take part in similarity (when `similar` is on at that level). Two listed types of
+ *   the same kind attract; two different listed types repel; unlisted types ignore similarity entirely.
+ * similarRepel[level]: false = keep only the "like attracts like" half (different listed types don't repel).
+ */
+export const PAIR_RULES = {
+  laws: [
+    // cells: rows/columns mint, violet, amber
+    [
+      [null, null, null],
+      [null, null, null],
+      [null, null, null],
+    ],
+    // organisms: rows/columns sky-blue, rose, lime
+    [
+      [null, null, null],
+      [null, null, null],
+      [null, null, null],
+    ],
+    // herds: rows/columns pale-blue, pale-pink
+    [
+      [null, null],
+      [null, null],
+    ],
+  ] as (number | null)[][][],
+  similarTypes: [
+    [0, 1, 2],
+    [0, 1, 2],
+    [0, 1],
+  ] as number[][],
+  similarRepel: [true, true, true],
 };
 
 /** One struct for every tier keeps hashing/serialisation trivial. Unused fields stay 0. */
@@ -197,21 +251,25 @@ export const P = {
   nCellTypes: 3,
   nSpecies: 3,
   nHerdKinds: 2,
-  nHerds: 5,
+  // TUNE: starting world (the app's defaults are in DEFAULTS in src/config.ts; these are the fallbacks)
+  /** starting herds (SimConfig.herds overrides) */
+  nHerds: 7,
+  /** starting lone organisms (SimConfig.lone overrides) */
   nLoneOrganisms: 18,
   /** cap on cells inside organisms (generated herds + lone organisms) */
   maxComposedCells: 380,
   /** loose cells floating around at the start (SimConfig.free overrides) */
   freeCells: 140,
-  // same-tier interactions: [T0, T1, T2]
+  // TUNE: same-tier interactions, per level [T0, T1, T2]: core range (rmin), reach (rmax),
+  // contact repulsion strength (repel) and overall strength of the laws (gain)
   rmin: [11, 58, 220],
   rmax: [45, 220, 800],
   repel: [600, 400, 300],
   gain: [150, 60, 70],
-  // springs member -> parent slot, indexed by parent tier
+  // TUNE: springs member -> parent slot, indexed by parent tier (how tightly parts are held)
   springK: [0, 70, 10],
   springC: [0, 4, 2],
-  // downward causation
+  // TUNE: downward causation (hormone / herd density)
   stressR: 20,
   stressRate: 0.15,
   hormoneRate: 0.1,
@@ -412,6 +470,13 @@ function similarOn(c: SimConfig, tier: number): boolean {
   return c.dyn?.similar[tier] === true;
 }
 
+/** Does similarity act between these two types at this level (PAIR_RULES.similarTypes / similarRepel)? */
+function similarPair(tier: number, a: number, b: number): boolean {
+  const types = PAIR_RULES.similarTypes[tier] ?? [];
+  if (!types.includes(a) || !types.includes(b)) return false;
+  return a === b || PAIR_RULES.similarRepel[tier] !== false;
+}
+
 function makeGrammar(r: RngState, c: SimConfig): Grammar {
   // recipes only use stable sizes
   const [omin, ounst] = band(c, 1);
@@ -443,6 +508,19 @@ function matrix(r: RngState, n: number): number[][] {
   return m;
 }
 
+/** Overwrite the seed-drawn law entries that PAIR_RULES fixes (non-null entries). */
+function applyPairRules(laws: Laws): void {
+  [laws.K0, laws.K1, laws.K2].forEach((K, t) =>
+    PAIR_RULES.laws[t]?.forEach((row, i) =>
+      row.forEach((v, j) => {
+        if (v !== null && K[i] && K[i][j] !== undefined) K[i][j] = v;
+      }),
+    ),
+  );
+}
+
+// TUNE: the seed draws every law entry from -1..1 (rounded to 0.01), cruise speeds and turning rates from the ranges
+// below. Fix individual law entries with PAIR_RULES instead of editing this.
 function makeLaws(r: RngState): Laws {
   const sign = () => (rand(r) < 0.5 ? -1 : 1);
   const K0 = matrix(r, P.nCellTypes);
@@ -563,11 +641,16 @@ export function createWorld(config: SimConfig): WorldState {
   const grammar = makeGrammar(rng, config);
   // laws are always drawn (so the rng stream, and thus the generated world, is the same either way), then zeroed
   const laws = config.laws === false ? lawless(makeLaws(rng)) : makeLaws(rng);
+  if (config.sameAttract === false) {
+    // no same-colour attraction between cells; same-colour repulsion and all other laws stay
+    laws.K0.forEach((row, i) => (row[i] = Math.min(0, row[i])));
+  }
+  if (config.laws !== false) applyPairRules(laws);
   const s = emptyState(config, rng, grammar, laws);
 
   // Always generate the hierarchical world first, so the flat condition gets the same cells.
   const herdPts: [number, number][] = [];
-  for (let h = 0; h < P.nHerds; h++) {
+  for (let h = 0; h < (config.herds ?? P.nHerds); h++) {
     const [x, y] = placeAwayFrom(rng, herdPts, 480, 260);
     herdPts.push([x, y]);
     const kind = h < 4 ? h % 2 : randInt(rng, 0, P.nHerdKinds - 1);
@@ -575,7 +658,7 @@ export function createWorld(config: SimConfig): WorldState {
   }
   const lonePts = herdPts.slice();
   const countCells = () => s.entities.filter((e) => e.tier === 0).length;
-  for (let i = 0; i < P.nLoneOrganisms; i++) {
+  for (let i = 0; i < (config.lone ?? P.nLoneOrganisms); i++) {
     const [x, y] = placeAwayFrom(rng, lonePts, 240, 80);
     lonePts.push([x, y]);
     const sp = randInt(rng, 0, P.nSpecies - 1);
@@ -1018,7 +1101,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
           const tri = 1 - Math.abs(2 * d - rmax - rmin) / (rmax - rmin);
           fa += P.gain[t] * K[a.type][b.type] * tri * w;
           fb += P.gain[t] * K[b.type][a.type] * tri * w;
-          if (similarOn(s.config, t) && !(lockOn(s.config, t) && isLockPair(a.type, b.type))) {
+          if (similarOn(s.config, t) && similarPair(t, a.type, b.type) && !(lockOn(s.config, t) && isLockPair(a.type, b.type))) {
             // birds of a feather: like types attract, unlike types repel (lock pairs are exempt: they fit)
             const sim = DYNAMICS.simGain[t] * (a.type === b.type ? 1 : -1) * tri * w;
             fa += sim;
@@ -1031,6 +1114,15 @@ function advance(s: WorldState, events: SimEvent[]): void {
           if (catalyses(b.type, a.type)) catTouched[a.id] = 1;
         }
         if (t === 0) {
+          if (
+            lock && drift && d < DYNAMICS.lockAttractR && a.parent < 0 && b.parent < 0 &&
+            a.bond < 0 && b.bond < 0 && isLockPair(a.type, b.type)
+          ) {
+            // two loose, unbound lock-pair cells near each other pull gently together, so they find each other and bind
+            const k = DYNAMICS.lockAttract * (1 - d / DYNAMICS.lockAttractR);
+            fa += k;
+            fb += k;
+          }
           if (lock && d < DYNAMICS.lockRepelR) {
             // a bound cell mildly pushes away every cell except its partner, so pairs don't clump
             const k = DYNAMICS.lockRepel * (1 - d / DYNAMICS.lockRepelR);

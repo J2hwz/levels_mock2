@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { simConfigOf } from '../src/config';
 import { replay } from '../src/replay';
 import { hashWorld } from '../src/sim/hash';
-import { DYNAMICS, type Dynamics, P, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, memberTargets, naturalRadius, ringUnits, step } from '../src/sim/world';
+import { DYNAMICS, type Dynamics, P, PAIR_RULES, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, memberTargets, naturalRadius, ringUnits, step } from '../src/sim/world';
 import { scriptedActions, testConfig, testSession } from './helpers';
 
 function runScripted(query: string, ticks: number): string {
@@ -111,7 +111,7 @@ describe('conditions', () => {
     expect(h.entities.filter((e) => e.tier === 0 && e.parent < 0).length).toBe(P.freeCells);
     expect(h.entities.filter((e) => e.tier === 0 && e.parent >= 0).length).toBeLessThanOrEqual(P.maxComposedCells);
     expect(f.entities.every((e) => e.tier === 0 && e.parent < 0)).toBe(true);
-    expect(h.entities.filter((e) => e.tier === 2).length).toBe(5);
+    expect(h.entities.filter((e) => e.tier === 2).length).toBe(P.nHerds);
   });
 
   it.each([
@@ -357,6 +357,31 @@ const ticks = (s: WorldState, n: number, evs: SimEvent[] = []) => {
 };
 
 describe('lock & key (cells only)', () => {
+  /** free type-0 and type-B cells placed `gap` apart in an empty spot; bonded within 2 s? */
+  const bindsFrom = (gap: number, typeB: number) => {
+    const s = dynWorld({ lock: true });
+    // isolate the pull: no seed law between these two types (at seed 42 violet repels mint at -0.65)
+    s.laws.K0[0][typeB] = 0;
+    s.laws.K0[typeB][0] = 0;
+    const a = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 0 && e.bond < 0)!;
+    const b = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === typeB && e.bond < 0 && e !== a)!;
+    const [x, y] = emptySpot(s);
+    place(s, a.id, x, y);
+    place(s, b.id, x + gap, y);
+    ticks(s, 60);
+    return a.bond === b.id;
+  };
+  it('loose mint and violet near each other pull together and bind', () => {
+    expect(bindsFrom(30, 1)).toBe(true);
+    expect(bindsFrom(30, 2)).toBe(false); // amber is not mint's key
+    const saved = DYNAMICS.lockAttract;
+    try {
+      DYNAMICS.lockAttract = 0;
+      expect(bindsFrom(30, 1)).toBe(false); // without the pull they stay apart
+    } finally {
+      DYNAMICS.lockAttract = saved;
+    }
+  });
   const pairUp = (s: WorldState, typeB: number) => {
     const a = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 0 && e.bond < 0)!;
     const b = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === typeB && e.bond < 0 && e !== a)!;
@@ -716,5 +741,91 @@ describe('loose cells', () => {
   it('the free parameter sets how many loose cells float around', () => {
     const s = createWorld({ hier: true, eps: 0.05, seed: 42, free: 40 });
     expect(s.entities.filter((e) => e.tier === 0 && e.parent < 0).length).toBe(40);
+  });
+});
+
+describe('starting counts', () => {
+  it('herds and lone set how many hazes and lone membranes the world starts with', () => {
+    const s = createWorld({ hier: true, eps: 0.05, seed: 42, herds: 3, lone: 4 });
+    expect(s.entities.filter((e) => e.tier === 2).length).toBe(3);
+    expect(s.entities.filter((e) => e.tier === 1 && e.parent < 0).length).toBe(4);
+  });
+});
+
+describe('same-colour attraction', () => {
+  it('sameAttract=false removes attraction between same-type cells and nothing else', () => {
+    const on = createWorld({ hier: true, eps: 0.05, seed: 42 });
+    const off = createWorld({ hier: true, eps: 0.05, seed: 42, sameAttract: false });
+    on.laws.K0.forEach((row, i) =>
+      row.forEach((v, j) => expect(off.laws.K0[i][j]).toBe(i === j ? Math.min(0, v) : v)),
+    );
+    expect(on.laws.K0.some((row, i) => row[i] > 0)).toBe(true); // seed 42 has some, so the test has teeth
+    expect(off.entities.length).toBe(on.entities.length);
+  });
+});
+
+describe('PAIR_RULES', () => {
+  /** run with PAIR_RULES temporarily changed, always restored */
+  const withRules = <T>(change: () => void, run: () => T): T => {
+    const saved = JSON.parse(JSON.stringify(PAIR_RULES));
+    try {
+      change();
+      return run();
+    } finally {
+      Object.assign(PAIR_RULES, saved);
+    }
+  };
+
+  it('fixes exactly the law entries it names; the rest stay seed-drawn; laws=0 still zeroes all', () => {
+    const base = createWorld({ hier: true, eps: 0.05, seed: 42 });
+    withRules(
+      () => {
+        PAIR_RULES.laws[0][0][1] = 0.8;
+        PAIR_RULES.laws[0][1][0] = -0.3;
+      },
+      () => {
+        const s = createWorld({ hier: true, eps: 0.05, seed: 42 });
+        s.laws.K0.forEach((row, i) =>
+          row.forEach((v, j) => expect(v).toBe(i === 0 && j === 1 ? 0.8 : i === 1 && j === 0 ? -0.3 : base.laws.K0[i][j])),
+        );
+        expect(s.laws.K1).toEqual(base.laws.K1);
+        expect(hashWorld(s)).toBe(hashWorld(base)); // same generated world
+        const none = createWorld({ hier: true, eps: 0.05, seed: 42, laws: false });
+        expect(none.laws.K0.flat().every((v) => v === 0)).toBe(true);
+      },
+    );
+  });
+
+  /** distance after 1 s between two free cells of types ta, tb placed 20 apart (flat world: laws are all zero) */
+  const gapAfter = (ta: number, tb: number, similar: boolean) => {
+    const s = dynWorld({ similar: similar ? lvl(0) : OFF }, { hier: false, seed: 3 });
+    const a = s.entities.find((e) => e.alive && e.type === ta)!;
+    const b = s.entities.find((e) => e.alive && e.type === tb && e !== a)!;
+    const [x, y] = emptySpot(s);
+    place(s, a.id, x, y);
+    place(s, b.id, x + 20, y);
+    ticks(s, 30);
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+
+  it('similarTypes: only the listed types take part in similarity', () => {
+    withRules(
+      () => (PAIR_RULES.similarTypes[0] = [0, 2]),
+      () => {
+        expect(gapAfter(1, 1, true)).toBe(gapAfter(1, 1, false)); // violet unlisted: no pull
+        expect(gapAfter(0, 0, true)).toBeLessThan(gapAfter(0, 0, false)); // mint listed: pulled together
+        expect(gapAfter(0, 2, true)).toBeGreaterThan(gapAfter(0, 2, false)); // mint and amber listed: pushed apart
+      },
+    );
+  });
+
+  it('similarRepel=false keeps like-attracts-like but drops unlike repulsion', () => {
+    withRules(
+      () => (PAIR_RULES.similarRepel[0] = false),
+      () => {
+        expect(gapAfter(0, 2, true)).toBe(gapAfter(0, 2, false));
+        expect(gapAfter(0, 0, true)).toBeLessThan(gapAfter(0, 0, false));
+      },
+    );
   });
 });
