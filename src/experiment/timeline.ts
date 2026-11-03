@@ -59,7 +59,8 @@ export function run(cfg: Config): JsPsych {
         <p>For about ${minutes} minute${minutes === 1 ? '' : 's'}, just <b>explore</b>. Watch, poke and try things out.
         Try to work out how this world works.</p>
         <p>Some things carry a small bar. If a bar runs out, that thing falls apart. You can help if you like,
-        but exploring is what matters most.</p></div>`,
+        but exploring is what matters most.</p>
+        <p>Afterwards you will be asked to describe what you found out.</p></div>`,
     ],
     on_finish: () => {
       session = buildSession(cfg);

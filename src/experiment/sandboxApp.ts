@@ -11,9 +11,8 @@ import { hashWorld } from '../sim/hash';
 import { type Action, P } from '../sim/world';
 import { ControlsLegend, InspectPanel, type InspectInfo, PhaseBanner, TimeControls } from '../ui/controls';
 import { h } from '../ui/dom';
-import { NotebookPanel } from '../ui/notebook';
 import { Notepad } from '../ui/notepad';
-import { RulesPanel } from '../ui/rules';
+import { REPORT, ReportPanel } from '../ui/report';
 import { saveBackup } from './storage';
 
 const TICK_MS = 1000 / P.ticksPerSecond;
@@ -28,14 +27,9 @@ export const PHASES = [
     text: 'Look around and try things out. Click, drag, zoom. Find out how this world works.',
   },
   {
-    key: 'organise',
-    title: 'Organise',
-    text: 'Many scientists describe the world as having levels. Organise what you see into groups, and groups within groups.',
-  },
-  {
-    key: 'theorise',
-    title: 'Theorise',
-    text: 'Write rules about how things in this world behave. Say which of your groups each rule is about.',
+    key: 'report',
+    title: 'Report',
+    text: REPORT.bannerText,
   },
 ] as const;
 
@@ -118,21 +112,20 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     return { css: hex(skin.herd[e.type]), name: skin.herdNames[e.type] };
   };
 
-  // ---- phase 2/3 panels
-  const notebook = new NotebookPanel({
-    getSelected: () => selected,
-    swatch: (id) => colourOf(id)?.css ?? null,
-    onDiff: (d) => session.log('notebook', d),
-    onFocusEntity: (id) => {
-      const n = layout[id];
-      if (!n) return;
-      select(id);
-      renderer.camera.x = n.x;
-      renderer.camera.y = n.y;
+  // ---- report (phase 2): the worked example is the green organism's real recipe, so it is always true
+  const greenRecipe = state.grammar.species[3][0];
+  const memberType = [0, 1, 2, 3].reduce((best, t) => (greenRecipe.filter((x) => x === t).length > greenRecipe.filter((x) => x === best).length ? t : best), 3);
+  const report = new ReportPanel(
+    {
+      colours: [skin.cell.map(hex), skin.species.map(hex), skin.herd.map(hex)],
+      shapes: skin.wobble > 0 ? skin.nucleus : skin.glyph,
     },
-  });
-  const rules = new RulesPanel(() => notebook.groups, (d) => session.log('rule', d));
-  notebook.onChange(() => rules.render());
+    { n: greenRecipe.filter((x) => x === memberType).length, member: { tier: 0, type: memberType }, whole: { tier: 1, type: 3 } },
+    (e) => {
+      session.log('report', e);
+      if (e.op === 'step') showReportStep();
+    },
+  );
 
   // ---- phases
   let phase = -1;
@@ -146,14 +139,25 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     phaseStart = performance.now();
     const p = PHASES[i];
     session.log('phase', { from, to: p.key, index: i });
-    banner.set(`${i + 1}/3 · ${p.title}`, p.text, i > 0, i === 2 ? 'Finish' : 'Continue');
     side.style.display = i > 0 ? '' : 'none';
-    side.replaceChildren(...(i >= 1 ? [notebook.el] : []), ...(i >= 2 ? [rules.el] : []));
+    side.replaceChildren(...(i === 1 ? [report.el] : []));
+    if (i === 1) {
+      session.log('report', { op: 'step', step: report.step });
+      showReportStep();
+    } else {
+      banner.set(`1/2 · ${p.title}`, p.text, false); // Explore ends on its timer
+    }
     saveBackup(session);
   };
+  /** banner for the current report step: Next until the last step, then Finish */
+  function showReportStep(): void {
+    const last = report.step === REPORT.steps.length - 1;
+    banner.set(`2/2 · ${PHASES[1].title} · step ${report.step + 1} of ${REPORT.steps.length}`, PHASES[1].text, true, last ? 'Finish' : 'Next');
+    saveBackup(session);
+  }
   const nextPhase = () => {
-    if (phase < 2) enterPhase(phase + 1);
-    else end();
+    if (phase === 0) enterPhase(1);
+    else if (!report.next()) end();
   };
   banner.button.addEventListener('click', nextPhase);
   banner.skip.addEventListener('click', nextPhase);
@@ -225,8 +229,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     window.clearInterval(backupTimer);
     notepad.flush('end');
     notepad.dispose();
-    session.log('phase', { from: PHASES[phase].key, to: 'end', index: 3 });
-    session.log('final_state', { notebook: notebook.groups, rules: rules.cards, notes: notepad.text });
+    session.log('phase', { from: PHASES[phase].key, to: 'end', index: PHASES.length });
+    session.log('final_state', { report: report.answers(), notes: notepad.text });
     const hash = session.end();
     const saved = saveBackup(session);
     input.dispose();

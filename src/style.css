@@ -300,3 +300,79 @@
   font-size: 11px;
   color: var(--muted);
 }
+
+/* report phase: picture tokens, blanks and rule sentences */
+.report .palette {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 10px;
+  padding: 6px;
+  background: var(--panel-2);
+  border-radius: 6px;
+}
+.report .palette-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.report .token {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+}
+.report .token.pick {
+  cursor: grab;
+  border-radius: 6px;
+}
+.report .token.pick:hover,
+.report .token.picked {
+  background: var(--panel);
+  outline: 2px solid var(--accent);
+}
+.report .rule-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.report .rule-line.example {
+  opacity: 0.6;
+  margin-bottom: 8px;
+}
+.report .blank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 2px dashed var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.report .blank.filled {
+  border-style: solid;
+  border-color: var(--panel);
+}
+.report .blank.over {
+  border-color: var(--accent);
+}
+.report .n,
+.report .n-input {
+  width: 3.2em;
+  text-align: center;
+}
+.report .card {
+  position: relative;
+  padding-right: 30px;
+}
+.report .rule-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+.report .row.wrap {
+  flex-wrap: wrap;
+}

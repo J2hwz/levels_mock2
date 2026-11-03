@@ -395,47 +395,43 @@ for (const hier of [1, 0]) {
   await page.locator('#notepad-hide').click();
   console.log('notepad typed (isolated after typing i/c:', isoAfterTyping, ')');
 
-  // phase 2: organise
+  // phase 2: report. Step 1: open description only
   await page.locator('#phase-skip').click();
-  await page.locator('[data-speed="0"]').click();
-  await page.evaluate((id) => {
-    const sb = window.__sandbox;
-    const n = sb.layout()[id];
-    sb.camera.x = n.x;
-    sb.camera.y = n.y;
-    sb.camera.zoom = 2.2;
-  }, ids.org);
-  await page.waitForTimeout(200);
-  [x, y] = await screenPos(page, ids.cell);
-  await page.mouse.click(x, y);
-  await page.locator('.notebook input[type=text]').first().fill('dots');
-  await page.locator('#nb-create').click();
-  await page.locator('[data-group="g1"] button', { hasText: '+ selected' }).click();
-  await page.mouse.click(x, y); // organism
-  await page.locator('.notebook input[type=text]').first().fill('blobs');
-  await page.locator('#nb-create').click();
-  await page.locator('[data-group="g2"] button', { hasText: '+ selected' }).click();
-  await page.locator('[data-group="g1"] select').selectOption('g2');
-  await page.locator('[data-group="g1"] input').fill('little dots');
-  await page.locator('[data-group="g1"] input').press('Enter');
-  await page.locator('.notebook input[type=text]').first().fill('temp');
-  await page.locator('#nb-create').click();
-  await page.locator('[data-group="g3"] button.danger').click();
-  await page.screenshot({ path: `${OUT}/runthrough_2_organise.png` });
+  await page.locator('[data-speed="1"]').click();
+  await page.locator('#report-describe').fill('There are coloured blobs made of little dots, and big hazes made of blobs. Purple and green stick together.');
+  await page.locator('#report-describe').blur();
+  await page.screenshot({ path: `${OUT}/runthrough_2_report_describe.png` });
+  await page.locator('#phase-continue').click(); // Next
 
-  // phase 3: theorise
-  await page.locator('#phase-continue').click();
-  await page.locator('#rules-add').click();
-  await page.locator('[data-card="r1"] select').selectOption('g2');
-  await page.locator('[data-card="r1"] textarea').nth(0).fill('two blobs get too close');
-  await page.locator('[data-card="r1"] textarea').nth(1).fill('their dots turn red and shake');
+  // step 2: fill-in-the-blank rules, by dragging picture tokens (and one by click-to-place)
+  const tok = (tier, type) => page.locator(`.palette .pick[data-token="${tier}:${type}"]`);
+  await page.locator('#report-add-interaction').click();
+  await tok(0, 1).dragTo(page.locator('[data-rule="q1"] [data-blank="a"]'));
+  await tok(0, 3).dragTo(page.locator('[data-rule="q1"] [data-blank="b"]'));
+  await page.locator('[data-rule="q1"] [data-field="outcome"]').fill('they stick together');
+  await page.locator('[data-rule="q1"] [data-field="outcome"]').blur();
+  await page.locator('#report-add-makeup').click();
+  await page.locator('[data-rule="q2"] [data-field="n"]').fill('4');
+  await page.locator('[data-rule="q2"] [data-field="n"]').blur();
+  await tok(1, 0).click(); // click-to-place
+  await page.locator('[data-rule="q2"] [data-blank="member"]').click();
+  await tok(2, 0).dragTo(page.locator('[data-rule="q2"] [data-blank="whole"]'));
+  await page.locator('#report-add-other').click();
+  await page.locator('[data-rule="q3"] [data-field="text"]').fill('light blue things make red things spin');
+  await page.locator('[data-rule="q3"] [data-field="text"]').blur();
   await page.locator('#notepad-open').click();
   await page.locator('#notepad-text').press('End');
   await page.locator('#notepad-text').pressSequentially('\nthe hazes drift in circles');
-  await page.locator('[data-speed="1"]').click();
-  await page.waitForTimeout(1500);
-  await page.screenshot({ path: `${OUT}/runthrough_3_theorise.png` });
-  await page.locator('#phase-continue').click();
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: `${OUT}/runthrough_3_report_rules.png` });
+  await page.locator('#notepad-hide').click();
+  await page.locator('#phase-continue').click(); // Next
+
+  // step 3: open organisation question, then Finish
+  await page.locator('#report-organise').fill('By size: dots, blobs and hazes; then by colour within each size.');
+  await page.locator('#report-organise').blur();
+  await page.screenshot({ path: `${OUT}/runthrough_4_report_organise.png` });
+  await page.locator('#phase-continue').click(); // Finish
 
   // end screen: download
   const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#download-data').click()]);
@@ -448,13 +444,14 @@ for (const hier of [1, 0]) {
     const notes = log.events.filter((e) => e.type === 'notepad' || e.type === 'notepad_toggle').map((e) => `${e.type}:${e.payload.reason ?? e.payload.open}`);
     const final = log.events.find((e) => e.type === 'final_state');
     console.log('notepad events:', notes.join(' '), '| final notes:', JSON.stringify(final.payload.notes));
+    console.log('final report:', JSON.stringify(final.payload.report));
   }
   const backup = await page.evaluate(() => {
     const k = localStorage.getItem('levels-sandbox-last');
     return k ? (localStorage.getItem(k)?.length ?? 0) : 0;
   });
   console.log('localStorage backup bytes:', backup);
-  await page.screenshot({ path: `${OUT}/runthrough_4_end.png` });
+  await page.screenshot({ path: `${OUT}/runthrough_5_end.png` });
   await page.close();
 }
 

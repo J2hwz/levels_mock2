@@ -78,6 +78,17 @@ describe('replay', () => {
     const notes = log.events.filter((e: { type: string }) => e.type === 'notepad');
     const final = log.events.find((e: { type: string }) => e.type === 'final_state');
     expect(final.payload.notes).toBe(notes[notes.length - 1].payload.text);
+    // the report phase: three steps in order, open answers, and rules built from picture tokens
+    const steps = log.events.filter((e: { type: string; payload: { op: string } }) => e.type === 'report' && e.payload.op === 'step').map((e: { payload: { step: number } }) => e.payload.step);
+    expect(steps).toEqual([0, 1, 2]);
+    const report = final.payload.report;
+    expect(report.describe.length).toBeGreaterThan(0);
+    expect(report.organise.length).toBeGreaterThan(0);
+    expect(report.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'interaction', a: { tier: 0, type: 1 }, b: { tier: 0, type: 3 } }),
+      expect.objectContaining({ kind: 'makeup', n: 4, member: { tier: 1, type: 0 }, whole: { tier: 2, type: 0 } }),
+      expect.objectContaining({ kind: 'other' }),
+    ]));
   });
 
   it('detects a tampered log', () => {
