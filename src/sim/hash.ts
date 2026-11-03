@@ -55,6 +55,11 @@ export function hashWorld(s: WorldState): string {
     // only hashed where it is used, so logs recorded before it existed (laws=1) still replay
     if (s.config.laws === false) h.num(e.heading);
   }
+  // encounters already rolled for decide future rolls, so they are part of the state
+  for (const [k, v] of [...s.contacts].sort((x, y) => x[0] - y[0])) {
+    h.num(k);
+    h.num(v);
+  }
   for (const r of s.regions) {
     h.num(r.health);
     h.num(r.stress);

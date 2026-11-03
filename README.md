@@ -35,8 +35,8 @@ Quick test link: `http://localhost:5173/?seed=42&short=1&debug=1`
 | `laws`  | `1` \| `0`                | `1`        | `0`: no laws. The interaction matrices, swimming and turning are zeroed. Every free-standing cell, organism and herd does a persistent random walk instead: it heads in a random direction that drifts (~3 s persistence) and bounces off walls, the same for every type. Contact, springs, downward causation and `lock`/`catalysis`/`similar` still apply. The starting world is identical to `laws=1` for the same seed |
 | `wander`| 0..5                      | `1`        | `laws=0` only: strength of the random walk. `0` = jiggle on the spot. At `1`, organisms from different units meet ~13 times per 2 min (laws on: ~17) |
 | `reveal`| `1` \| `0`                | `1`        | `1`: organisms and herds show only their colour until hovered. `0`: contents always visible |
-| `lock`  | `1` \| `0`                | `1`        | lock & key between cells (mint + violet bind; pairs stay attached inside organisms) |
-| `catalysis` | `1` \| `0`            | `1`        | catalysis between organisms (sky-blue makes rose spin; such pairs sit together in herds) |
+| `lock`  | `1` \| `0`                | `1`        | lock & key at every level (purple + green bind; chance per encounter 90 % cells / 40 % organisms / 10 % herds) |
+| `catalysis` | `1` \| `0`            | `1`        | catalysis at every level (light blue makes red spin; chance per encounter 40 % cells / 90 % organisms / 10 % herds) |
 | `similar` | levels                  | none       | similarity ("birds of a feather") at these levels |
 | `org`   | `min-unstable`            | `5-8`      | membrane size band: stable with 5–7 cells, drains below 5 or at 8+ |
 | `herd`  | `min-unstable`            | `3-7`      | haze size band: stable with 3–6 membranes |
@@ -61,29 +61,63 @@ for one run. To change a default, or to change *which* elements interact and *ho
 | turn a mechanism on/off by default (`laws`, `same`, `lock`, `catalysis`) | `DEFAULTS` in `src/config.ts` | the URL overrides it per run |
 | turn similarity on by default at some levels | `parseConfig` in `src/config.ts`: `similar: levels(q.get('similar') ?? '0')` | `'0'` cells, `'0,1'` cells + organisms, `'all'` |
 | size bands, starting counts, movement | `DEFAULTS` in `src/config.ts` (`org`, `herd`, `free`, `herds`, `lone`, `move`, `wander`) | |
-| which types bind (lock & key) and at which level | `DYNAMICS.lockPairs`, `DYNAMICS.lockTier` in `src/sim/world.ts` | |
-| which type makes which spin (catalysis) and at which level | `DYNAMICS.catalysis`, `DYNAMICS.catalysisTier` | `[catalyst, target]` |
-| strengths of lock & key, catalysis, similarity | `DYNAMICS` (`bondK`, `lockAttract`, `lockRepel`, `catSpin`, `catDecay`, `simGain`, ...) | each has a comment |
+| **how cells make organisms and organisms make herds (composition)** | `COMPOSITION` in `src/sim/world.ts` | see "Composition" below |
+| which types bind (lock & key) | `DYNAMICS.lockPairs` in `src/sim/world.ts` | |
+| how likely lock & key is at each level | `DYNAMICS.lockChance` `[cells, organisms, herds]` | `0` switches that level off |
+| which type makes which spin (catalysis) | `DYNAMICS.catalysis` | `[catalyst, target]` |
+| how likely catalysis is at each level | `DYNAMICS.catChance` `[cells, organisms, herds]` | `0` switches that level off |
+| strengths of lock & key, catalysis, similarity | `DYNAMICS` (`bondK`, `bindMargin`, `lockAttract`, `lockRepel`, `catMargin`, `catSpin`, `catDecay`, `simGain`, ...) | per level `[cells, organisms, herds]`; each has a comment |
 | **exactly which pairs attract or repel (the laws)** | `PAIR_RULES.laws` in `src/sim/world.ts` | `null` = left to the seed |
 | **exactly which types take part in similarity** | `PAIR_RULES.similarTypes`, `PAIR_RULES.similarRepel` | |
 | ranges and overall strength of the laws, contact repulsion | `P.rmin`, `P.rmax`, `P.gain`, `P.repel` in `src/sim/world.ts` | per level `[cells, organisms, herds]` |
 
 ### Type numbers
 
-The tables refer to elements by number. Names in brackets are for the abstract skin.
+There are four elements at every level, numbered the same way and grouped by colour. Both skins use these colours.
+Only cells carry a shape; organisms and herds are just the colour.
 
-| level | 0 | 1 | 2 |
-|---|---|---|---|
-| cells (level 0) | mint (blue) | violet (red) | amber (green) |
-| organisms / membranes (level 1) | sky-blue (purple) | rose (brown) | lime (cyan) |
-| herds / hazes (level 2) | pale-blue (dark) | pale-pink (grey) | – |
+| number | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| colour (every level) | light blue | purple | red | green |
+| cell shape | circle | triangle | square | star |
+
+### Composition
+
+How cells make up organisms and organisms make up herds is set in **one place: `COMPOSITION` in `src/sim/world.ts`**
+(marked `TUNE:`). Change `mode` to pick a rule:
+
+| `mode` | rule | example |
+|---|---|---|
+| `'same'` (default) | a colour is made only of its own colour | a purple organism = 5 purple cells; a purple herd = 4 purple organisms |
+| `'pairs'` | a colour is made of itself and its partner `pairs[colour]`, `pairShare` (60 %) own colour | `pairs: [3, 2, 1, 0]`: purple organism = 3 purple + 2 red cells |
+| `'mostly'` | at least `mostlyShare` (60 %) own colour, the rest drawn at random by the seed | (the old rule) |
+| `'custom'` | exactly the counts in `custom` | see below |
+
+- **Sizes:** `sizes.organism = [5, 7]` and `sizes.herd = [4, 6]` are the members per recipe. Each colour has two recipes:
+  recipe 0 is used to build the world, and recipe 1 only by the debug swap (`S`). Sizes are clamped into the size bands
+  (`org`, `herd`).
+- **Custom ratios:** `custom.organism[colour]` and `custom.herd[colour]` each list recipes as counts of
+  `[light blue, purple, red, green]`. For example, purple organisms of 3 purple + 2 green cells (and a 7-cell second recipe):
+  ```ts
+  mode: 'custom',
+  custom: {
+    organism: [ [[5,0,0,0],[7,0,0,0]], [[0,3,0,2],[0,4,0,3]], [[0,0,5,0],[0,0,7,0]], [[0,0,0,5],[0,0,0,7]] ],
+    herd:     [ [[4,0,0,0],[6,0,0,0]], [[0,4,0,0],[0,6,0,0]], [[0,0,4,0],[0,0,6,0]], [[0,0,0,4],[0,0,0,6]] ],
+  },
+  ```
+- **What follows from the recipes:**
+  - A thing can **join** a parent if its colour appears in a recipe of the parent's colour.
+  - Loose things can **combine** if one colour's recipes accept all of them; the new parent takes that colour.
+  - With `'same'`, only same-colour things join or combine, and a whole never contains two colours.
+- **Starting world:** herds cycle through the four colours; lone organisms and loose cells get random colours.
 
 ### Specifying exactly who interacts with whom
 
-- **Lock & key:** `DYNAMICS.lockPairs` lists the pairs that bind, e.g. `[[0, 1]]` = mint and violet. Add pairs like `[[0, 1], [1, 2]]`.
-  Each cell still binds to at most one partner. The level is `DYNAMICS.lockTier`.
-- **Catalysis:** `DYNAMICS.catalysis` lists `[catalyst, target]`, e.g. `[[0, 1]]` = sky-blue makes rose spin. Add more, e.g.
-  `[[0, 1], [2, 0]]`. The level is `DYNAMICS.catalysisTier`.
+- **Lock & key:** `DYNAMICS.lockPairs` lists the pairs that bind, e.g. `[[1, 3]]` = purple and green. Add pairs like
+  `[[1, 3], [0, 2]]`. Each thing binds to at most one partner. `DYNAMICS.lockChance` sets how likely an encounter is to
+  bind at each level.
+- **Catalysis:** `DYNAMICS.catalysis` lists `[catalyst, target]`, e.g. `[[0, 2]]` = light blue makes red spin. Add more, e.g.
+  `[[0, 2], [3, 1]]`. `DYNAMICS.catChance` sets how likely an encounter is to make the target spin at each level.
 - **Laws (general attract/repel):** `PAIR_RULES.laws[level][i][j]` says how strongly type `i` is pulled toward type `j`.
   The row is the one that moves; the column is the one it reacts to. It is not symmetric, so set both `[i][j]` and `[j][i]`
   for a mutual effect.
@@ -99,17 +133,17 @@ The tables refer to elements by number. Names in brackets are for the abstract s
 Examples (edit `PAIR_RULES` in `src/sim/world.ts`):
 
 ```ts
-// 1. at cell level, only mint and violet attract each other; nothing else attracts or repels through the laws
+// 1. at cell level, only purple and green attract each other; nothing else attracts or repels through the laws
 laws: [
-  [[0, 1, 0], [1, 0, 0], [0, 0, 0]],   // cells
+  [[0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0], [0, 1, 0, 0]],   // cells
   /* organisms, herds unchanged */ ...
 ],
 
-// 2. rose membranes flee sky-blue ones (the rest left to the seed)
-laws[1] = [[null, null, null], [-1, null, null], [null, null, null]]   // row rose (1), column sky-blue (0)
+// 2. red organisms flee light blue ones (the rest left to the seed)
+laws[1] = [[null, null, null, null], [null, null, null, null], [-1, null, null, null], [null, null, null, null]]   // row red (2), column light blue (0)
 
-// 3. similarity only among mint and amber cells, and without the push-apart (run with ?similar=0)
-similarTypes: [[0, 2], [0, 1, 2], [0, 1]],
+// 3. similarity only among light blue and red cells, and without the push-apart (run with ?similar=0)
+similarTypes: [[0, 2], [0, 1, 2, 3], [0, 1, 2, 3]],
 similarRepel: [false, true, true],
 ```
 
@@ -123,7 +157,7 @@ similarRepel: [false, true, true],
 
 ### Good to know
 
-- **Old logs stop replaying.** Any change to `DYNAMICS`, `PAIR_RULES`, `P` or a default that alters the simulation does this.
+- **Old logs stop replaying.** Any change to `DYNAMICS`, `COMPOSITION`, `PAIR_RULES`, `P` or a default that alters the simulation does this.
   After changing them, run `npm run screenshots` (it re-records `tests/fixtures/browser-session.json`), then `npm test`.
 - **Tests don't follow your defaults.** They build their own worlds, so a changed default doesn't change what they check.
   They read `DYNAMICS` values rather than hard-coding them, but behaviour tests (e.g. "a bound pair stays touching", "similarity
@@ -192,7 +226,7 @@ at most 8 ticks per frame). Every participant action is an `Action` applied at t
 | composition / near-decomposability | members are held by springs to slots around their parent's centre; same-tier type matrices act at full strength between **siblings** and at `eps` between non-siblings; members push back on their parent at `eps` |
 | level-specific laws | organism centres move by the organism matrix, herd centres by the herd matrix, plus a per-kind cruise and turn rate, so herd motion is predictable from herd-level laws alone |
 | multiple realisation | each species and herd kind has 2 recipes from the grammar; `swap` rebuilds with the other recipe and the trajectory is unchanged (tested) |
-| downward causation, organism → cell | hormone = smoothed mean stress of the organism's cells (stress = crowding by cells of *other* organisms). Each cell reads a **noisy** copy of its own organism's hormone; above threshold it jitters and repels neighbours, and its colour shifts toward red |
+| downward causation, organism → cell | hormone = smoothed mean stress of the organism's cells (stress = crowding by cells of *other* organisms). Each cell reads a **noisy** copy of its own organism's hormone; above threshold it jitters and repels neighbours, and it darkens and flickers |
 | downward causation, herd → organism | density = expected slot spacing / mean nearest-neighbour distance of its organisms. Each organism reads a noisy copy and drifts outward when density > 1, inward when < 1 |
 | light goal | organism health falls while the hormone is above threshold and recovers otherwise; at 0 the organism falls apart into free cells (`organism_death` event) |
 
@@ -256,10 +290,10 @@ Where the brief left something open, I chose the following.
 
 **World**
 - World is 2400 × 1600 units with soft walls. The camera starts fitted to the whole world.
-- Grammar: 3 cell types, 3 species, 2 herd kinds. Each species has 2 recipes (realisations): recipe 0 is ≥60 % its "own" cell type, recipe 1 is ≥60 % the next type, so swaps look different. The same holds for herd kinds over species. **Generation always uses recipe 0**, so a species looks consistent until someone swaps.
-- `herds` herds (default 7; the first 4 alternate kinds, the rest are random), `lone` lone organisms (default 18; skipped if cells inside organisms would exceed 380), then `free` loose cells (default 140). Defaults live in `DEFAULTS` in `src/config.ts`. The generated herd recipe has 4–6 organisms (one more than the band minimum, up to its largest stable size), so every starting herd has more than 3. With 7 herds that gives ~46 organisms and ~400 cells at the start (seed 42: 397 cells, 46 organisms). Tests check the loose-cell count and the cap over 32 seeds. More loose cells means more crowding: at seed 42 about 5 organisms die in 3 min with 120 loose cells (2 with 50, 9 with 200).
+- Grammar: 4 colours at every level (light blue, purple, red, green). Each colour of organism and herd has 2 recipes (realisations), built from `COMPOSITION` (default `'same'`: own colour only, 5 / 7 cells and 4 / 6 organisms). **Generation always uses recipe 0**; recipe 1 appears only via the debug swap.
+- `herds` herds (default 7; they cycle through the four colours), `lone` lone organisms (default 18; skipped if cells inside organisms would exceed 380), then `free` loose cells (default 140). Defaults live in `DEFAULTS` in `src/config.ts`. Each starting herd has 4 organisms of 5 cells (recipe 0 of `COMPOSITION`). With 7 herds that gives 46 organisms and ~370 cells at the start (seed 42: 370 cells, 46 organisms). Tests check the loose-cell count and the cap over 32 seeds. More loose cells means more crowding: at seed 42 about 5 organisms die in 3 min with 120 loose cells (2 with 50, 9 with 200).
 - The laws (3×3 cell, 3×3 organism, 2×2 herd matrices, cruise speeds and turn rates) are drawn from the seed, so each seed is a different "physics".
-- **Same-colour attraction (`same`):** the cell law matrix is drawn per seed, so for roughly half the seeds' cell types same-colour cells attract (seed 42: mint 0.57, violet 0.69, amber −0.1). With `same=0` (default) any positive same-colour entry is set to 0. Similarity (`similar`) is a separate, opt-in attraction and is not affected.
+- **Same-colour attraction (`same`):** the cell law matrix is drawn per seed, so for roughly half the seeds' cell types same-colour cells attract (the values depend on the seed). With `same=0` (default) any positive same-colour entry is set to 0. Similarity (`similar`) is a separate, opt-in attraction and is not affected.
 - Interaction kernel is particle-life style: repulsive core below `rmin`, matrix-weighted triangular kernel up to `rmax`.
 - **Free cells feel all cells at full strength.** They sit in no unit, so there is no boundary to leak across. This makes them drift into organisms and cause crowding. Without it nothing ever got stressed and the goal never came into play.
 - Collision repulsion is always full strength (it is physical contact, not a "law"). It also acts **between levels** (see Mechanisms).
@@ -285,15 +319,21 @@ Where the brief left something open, I chose the following.
 
 **Mechanisms** (`lock` and `catalysis` on by default; `similar` off by default)
 
-The rules are fixed and deterministic (no random draws or noise), kept in `DYNAMICS` in `src/sim/world.ts`. Each mechanism
-belongs to one level; herds have none.
+The rules are kept in `DYNAMICS` in `src/sim/world.ts`. Lock & key and catalysis act at **every level**, but only ever
+between two things of the **same** level (a cell never binds to or spins an organism). How likely they are is graded by level.
 
-| mechanism | level | rule | strength |
+**Chance per encounter.** When two eligible things start touching, one roll decides whether the rule fires. If it fails,
+nothing happens for as long as they stay in contact. Only after they separate (gap beyond twice the contact margin) can a new
+encounter roll again. Members of the same whole get one roll when they first become siblings. Rolls use the seeded random
+generator in a fixed order, so runs replay exactly. A chance of `0` switches the rule off at that level.
+
+| mechanism | rule | chance per encounter (cells / organisms / herds) | other settings |
 |---|---|---|---|
-| lock & key | cells | A mint and a violet cell **bind** when two free, unbound ones touch (gap < 4 units). Before that, two free, unbound ones within 40 units **pull gently together** (50 at contact, fading to 0; needs `move=1`). The seed's laws still act on top, so where they make violet repel mint (seed 42: −0.65) the pull only wins within ~15 units. At seed 42 this gives ~3 free bonded pairs after 60 s, against none without it. Inside an organism its unbound mint and violet cells **pair up on their own** (greedily, in child order), including in the generated world, after joins and combines, and every tick. Bonds are never made across organisms, or between a free cell and a member. A spring holds a pair touching; it is dragged as one; it **stays attached** when it joins or combines into an organism, and when that organism dies (the pair flies out together). Each pair shares one place on its organism's ring. A bound cell **mildly pushes away every other cell** within 30 units (100 at contact, fading to 0), so pairs don't clump | bond spring 60 |
-| catalysis | organisms | A sky-blue organism (species 0) touching a rose one (species 1; gap < 12) makes the rose one **spin at 3.0 rad/s** (~1 turn per 2 s). After contact ends it keeps spinning, slowing by 4 % per tick, and stops ~2 s later. It works at full strength wherever they are (free, in a herd, or one free and one in a herd). Inside a herd, a sky-blue and a rose member **sit together** at one place on the ring, just apart (gap 6), so the rose one keeps spinning; other members keep their own places. The spinning organism's ring of cells turns with it, and a rim dot shows its orientation | 3.0 rad/s |
-| similarity | per level (`similar=`) | like types attract, unlike types repel, with the same kernel as the laws. Mint–violet pairs are exempt from the repulsion while lock is on | gain 45 / 18 / 20 |
+| lock & key | A purple and a green thing **bind** when two free, unbound ones of the same level touch (gap < 4 / 8 / 20 units). Before that, two free, unbound ones **pull gently together** (within 40 / 90 / 260 units; strength 50 / 20 / 8 at contact; needs `move=1`). The pull stops once their encounter has been rolled. A spring holds a bound pair touching, and it is dragged as one. Only Shift-drag separates them. Inside a whole (possible only with mixed recipes), unbound purple and green members pair up. A pair stays attached when it joins or combines, and sits together on its parent's ring. A bound cell **mildly pushes away other cells** within 30 units, so pairs don't clump | **90 % / 40 % / 10 %** | bond spring 60 / 30 / 8 |
+| catalysis | A light blue thing touching a red one of the same level (gap < 6 / 12 / 30) makes the red one **spin** for as long as they touch. After contact ends it keeps spinning, slowing by 4 % per tick, and stops ~2 s later. A spinning cell turns its shape; a spinning organism or herd turns its ring of members, with a rim dot showing its orientation. Inside a whole (mixed recipes only), a catalyst and its target sit together | **40 % / 90 % / 10 %** | spin 3 / 3 / 1 rad/s |
+| similarity | like types attract, unlike types repel, with the same kernel as the laws. Purple–green pairs are exempt from the repulsion while lock is on | – (a force, always on where switched on) | gain 45 / 18 / 20 |
 
+The encounters already rolled for are world state (`contacts`). Like `bond` and `spin`, they are hashed and in snapshots.
 Bond and spin are entity state (`bond`, `spin`) and are hashed. Similarity needs `move=1` (it is a force); lock & key and
 catalysis also work with `move=0`.
 
@@ -331,7 +371,7 @@ free-standing ancestor's outline. Same-level collision is unchanged.
 - `size=irrelevant`: each *free-standing* entity's radius is a hash of (seed, id) drawn uniformly from 6–56 world units, whatever its tier. Members are drawn as a scaled copy of the physical layout fitted inside the parent. Positions on screen equal sim positions for free-standing entities, but physics still uses physical sizes, so a tiny-looking herd still takes up its physical space in collisions.
 - The radius–tier correlation test is computed over **free-standing entities**, pooled over 40 seeds (|r| < 0.1), and also over the per-entity draw for all entities. A nested member is necessarily smaller than its parent, so over all *drawn* nested entities radius cannot be fully tier-independent if members must fit inside parents. A proxy-mode control test asserts r > 0.7, so the test has teeth.
 - Tier cues in `irrelevant`: cells solid, organisms a membrane, herds a dashed boundary. In `proxy`, herds have a faint solid boundary.
-- Stress colour shift: the cell colour blends toward red by up to 65 % as the noisy hormone signal approaches 0.6.
+- Stress cue: a stressed cell darkens (up to 55 % toward black) and flickers as the noisy hormone signal approaches 0.6. It no longer turns red, because red is now an element colour.
 - Health bar above each organism (green → red), and above each region in the flat condition.
 - Biology skin: dark background, translucent cells with a type-specific nucleus (dot / triangle / hexagon), wobbly membranes. Abstract skin: light background, solid circle / triangle / hexagon glyphs, plain outlines.
 - Membrane wobble is cosmetic and render-only (it does not touch the sim).

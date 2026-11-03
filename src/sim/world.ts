@@ -37,8 +37,8 @@ export interface SimConfig {
 }
 
 /**
- * Same-level dynamics. Lock & key acts only between cells and catalysis only between organisms
- * (DYNAMICS.lockTier / catalysisTier); herds have neither. Similarity is switched per tier [cells, organisms, herds].
+ * Same-level dynamics. Lock & key and catalysis act at every level with a per-level chance per encounter
+ * (DYNAMICS.lockChance / catChance; `lock` / `catalysis` switch them off entirely). Similarity is switched per tier.
  */
 export interface Dynamics {
   lock: boolean;
@@ -50,46 +50,48 @@ export const DEFAULT_ORG: readonly [number, number] = [5, 8];
 export const DEFAULT_HERD: readonly [number, number] = [3, 7];
 
 // =====================================================================================================
-// TUNE: within-level mechanisms. Which pairs bind / catalyse, and how strong every mechanism is.
+// TUNE: within-level mechanisms. Which pairs bind / catalyse, how likely, and how strong every mechanism is.
 // Switch mechanisms on/off in DEFAULTS (src/config.ts) or the URL. See README "Tuning the interactions".
-// Types: cells 0 mint, 1 violet, 2 amber · organisms 0 sky-blue, 1 rose, 2 lime · herds 0 pale-blue, 1 pale-pink
+// Types at every level: 0 light blue, 1 purple, 2 red, 3 green. Per-level arrays are [cells, organisms, herds].
+// Interactions only ever act between two things of the SAME level.
 // =====================================================================================================
 
 /**
- * The fixed (deterministic) rules of the same-level dynamics, and their strengths per tier.
- * Types are cell types (T0), species (T1) and herd kinds (T2); the same tables apply at every level.
+ * The fixed rules of the same-level dynamics and their strengths per level. Lock & key and catalysis fire with a
+ * chance per encounter: when two eligible things start touching, one (seeded, replayable) roll decides; if it fails
+ * they must separate and touch again to retry.
  */
 export const DYNAMICS = {
-  /** lock & key acts between cells only */
-  lockTier: 0,
-  /** catalysis acts between organisms only */
-  catalysisTier: 1,
-  /** lock & key: unordered pairs of cell types that bind (mint + violet) */
-  lockPairs: [[0, 1]] as readonly (readonly [number, number])[],
-  /** catalysis: [catalyst, target] species: the target spins while the catalyst touches it (sky-blue -> rose) */
-  catalysis: [[0, 1]] as readonly (readonly [number, number])[],
-  /** bond spring strength / damping */
-  bondK: 60,
-  bondC: 6,
-  /** a pair binds when closer than rA + rB + bindMargin */
-  bindMargin: 4,
+  /** lock & key: unordered pairs of types that can bind (purple + green), at every level */
+  lockPairs: [[1, 3]] as readonly (readonly [number, number])[],
+  /** chance that an encounter of a lock pair binds them, per level */
+  lockChance: [0.9, 0.4, 0.1],
+  /** catalysis: [catalyst, target]: the target spins while the catalyst touches it (light blue -> red) */
+  catalysis: [[0, 2]] as readonly (readonly [number, number])[],
+  /** chance that an encounter of catalyst and target makes the target spin (for that contact), per level */
+  catChance: [0.4, 0.9, 0.1],
+  /** bond spring strength / damping, per level */
+  bondK: [60, 30, 8],
+  bondC: [6, 4, 2],
+  /** "touching" for lock & key: closer than rA + rB + bindMargin; separating beyond rA + rB + 2 * bindMargin allows a retry */
+  bindMargin: [4, 8, 20],
   /** a bound cell pushes every cell except its partner within this range ... */
   lockRepelR: 30,
-  /** ... with this strength at contact, fading to 0 at the range (collision is 600, laws <= 150) */
-  lockRepel: 100,
-  /** before binding: a free mint and a free violet within this range pull gently toward each other ... */
-  lockAttractR: 40,
-  /** ... with this strength at contact, fading to 0 at the range (free-cell noise 30, laws <= 150) */
-  lockAttract: 50,
-  /** "touching" for catalysis: closer than rA + rB + catMargin */
-  catMargin: 12,
-  /** catalysed spin, rad/s (~1 turn per 2 s) */
-  catSpin: 3.0,
-  /** without contact the spin decays by this factor per tick (3.0 -> 0.3 rad/s in ~1.9 s) ... */
+  /** ... with this strength at contact, fading to 0 at the range, per level (cells only by default) */
+  lockRepel: [100, 0, 0],
+  /** before binding: two free, unbound lock-pair things within this range pull gently toward each other ... */
+  lockAttractR: [40, 90, 260],
+  /** ... with this strength at contact, fading to 0 at the range, per level (stops once an encounter has been tried) */
+  lockAttract: [50, 20, 8],
+  /** "touching" for catalysis: closer than rA + rB + catMargin (separating beyond rA + rB + 2 * catMargin allows a retry) */
+  catMargin: [6, 12, 30],
+  /** catalysed spin, rad/s, per level */
+  catSpin: [3.0, 3.0, 1.0],
+  /** without contact the spin decays by this factor per tick ... */
   catDecay: 0.96,
   /** ... and stops below this (~2 s after contact ends) */
   catStop: 0.2,
-  /** gap between the two organisms of a catalyst-target pair placed together in a herd */
+  /** gap between the two members of a catalyst-target pair seated together in a whole */
   pairGap: 6,
   /** "touching" for combining a group with C: gap below this, per tier [cells, organisms] */
   combineMargin: [8, 20],
@@ -97,6 +99,49 @@ export const DYNAMICS = {
   simGain: [45, 18, 20],
   /** health lost per second while a composite is outside its size band */
   sizeDecay: 0.05,
+};
+
+export type CompositionMode = 'same' | 'pairs' | 'mostly' | 'custom';
+
+/**
+ * TUNE: composition, i.e. how cells make up organisms and organisms make up herds. Edit this to change it.
+ * Colours at every level: 0 light blue, 1 purple, 2 red, 3 green. Each colour of organism / herd has two recipes
+ * (realisations): recipe 0 is used when the world is generated, recipe 1 only via the debug swap (S key).
+ *
+ *   'same'   (default) a colour is made only of its own colour: a purple organism = purple cells, a purple herd =
+ *            purple organisms. Sizes from `sizes`.
+ *   'pairs'  a colour is made of itself and its partner `pairs[colour]`, `pairShare` of its own colour (rounded up).
+ *   'mostly' at least `mostlyShare` of its own colour, the rest drawn at random by the seed.
+ *   'custom' exactly the counts in `custom`: per colour, per recipe, how many of each member colour.
+ *
+ * Sizes are clamped into the size bands (`org`, `herd`: [min, unstable)) so the generated world is stable.
+ * Who may join or combine follows from the recipes: a thing can join a parent if its colour appears in a recipe of
+ * the parent's colour, and loose things can combine if one colour's recipes accept all of them.
+ */
+export const COMPOSITION = {
+  mode: 'same' as CompositionMode,
+  /** members per recipe [recipe 0, recipe 1], for 'same' / 'pairs' / 'mostly' */
+  sizes: { organism: [5, 7], herd: [4, 6] },
+  /** 'pairs': partner colour of each colour (light blue+green, purple+red) */
+  pairs: [3, 2, 1, 0],
+  pairShare: 0.6,
+  /** 'mostly': minimum share of its own colour */
+  mostlyShare: 0.6,
+  /** 'custom': [colour][recipe] = counts of member colours [light blue, purple, red, green] */
+  custom: {
+    organism: [
+      [[5, 0, 0, 0], [7, 0, 0, 0]],
+      [[0, 5, 0, 0], [0, 7, 0, 0]],
+      [[0, 0, 5, 0], [0, 0, 7, 0]],
+      [[0, 0, 0, 5], [0, 0, 0, 7]],
+    ],
+    herd: [
+      [[4, 0, 0, 0], [6, 0, 0, 0]],
+      [[0, 4, 0, 0], [0, 6, 0, 0]],
+      [[0, 0, 4, 0], [0, 0, 6, 0]],
+      [[0, 0, 0, 4], [0, 0, 0, 6]],
+    ],
+  },
 };
 
 /**
@@ -112,28 +157,32 @@ export const DYNAMICS = {
  */
 export const PAIR_RULES = {
   laws: [
-    // cells: rows/columns mint, violet, amber
+    // cells: rows/columns light blue, purple, red, green
     [
-      [null, null, null],
-      [null, null, null],
-      [null, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
     ],
-    // organisms: rows/columns sky-blue, rose, lime
+    // organisms: rows/columns light blue, purple, red, green
     [
-      [null, null, null],
-      [null, null, null],
-      [null, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
     ],
-    // herds: rows/columns pale-blue, pale-pink
+    // herds: rows/columns light blue, purple, red, green
     [
-      [null, null],
-      [null, null],
+      [null, null, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
     ],
   ] as (number | null)[][][],
   similarTypes: [
-    [0, 1, 2],
-    [0, 1, 2],
-    [0, 1],
+    [0, 1, 2, 3],
+    [0, 1, 2, 3],
+    [0, 1, 2, 3],
   ] as number[][],
   similarRepel: [true, true, true],
 };
@@ -162,7 +211,7 @@ export interface Entity {
   hormone: number;
   /** T1/T2: 0..1 */
   health: number;
-  /** lock & key partner (free entities only), -1 = none */
+  /** lock & key partner (two free entities, or two members of the same whole), -1 = none */
   bond: number;
   /** T2: packing of its organisms (1 = nominal) */
   density: number;
@@ -170,7 +219,7 @@ export interface Entity {
   realisation: number;
   /** laws=0 only: direction of the persistent random walk (separate from `angle`, which catalysis turns) */
   heading: number;
-  /** T1: catalysed spin, rad/s; set on contact with a catalyst, decays after */
+  /** catalysed spin, rad/s (any level); set while a successful catalyst contact lasts, decays after */
   spin: number;
 }
 
@@ -216,7 +265,20 @@ export interface WorldState {
   /** id of isolated entity, or -1 */
   isolated: number;
   drag: { id: number; x: number; y: number } | null;
+  /**
+   * Encounters already rolled for: pair key (lower id * PAIR_KEY + higher id) -> CONTACT_* bits. An entry is
+   * cleared when the pair separates (or stops being siblings), which allows a new roll.
+   */
+  contacts: Map<number, number>;
 }
+
+export const PAIR_KEY = 1_000_000;
+/** lock & key roll made for this encounter */
+export const CONTACT_LOCK = 1;
+/** catalysis roll made for this encounter ... */
+export const CONTACT_CAT = 2;
+/** ... and it succeeded: the target spins while the contact lasts */
+export const CONTACT_CAT_OK = 4;
 
 export type Action =
   | { kind: 'select'; id: number | null }
@@ -248,9 +310,10 @@ export const P = {
   cellR: 5,
   damping: 0.9,
   maxSpeed: 400,
-  nCellTypes: 3,
-  nSpecies: 3,
-  nHerdKinds: 2,
+  /** four colours at every level: 0 light blue, 1 purple, 2 red, 3 green */
+  nCellTypes: 4,
+  nSpecies: 4,
+  nHerdKinds: 4,
   // TUNE: starting world (the app's defaults are in DEFAULTS in src/config.ts; these are the fallbacks)
   /** starting herds (SimConfig.herds overrides) */
   nHerds: 7,
@@ -328,18 +391,17 @@ export function slotPos(parent: Entity, k: number, n: number): [number, number] 
 }
 
 /**
- * A parent's children grouped into places on its ring. A pair shares one place, its two members touching:
- * in an organism, a lock & key pair of its own cells; in a herd (catalysis on), a catalyst + target organism,
- * matched greedily in child order. Everything else gets a place of its own.
+ * A parent's children grouped into places on its ring. A pair shares one place, its two members touching: a lock &
+ * key pair bound inside this parent, or (catalysis on at the members' level) a catalyst + target, matched greedily in
+ * child order. Everything else gets a place of its own.
  */
 export function ringUnits(s: WorldState, p: Entity): number[][] {
   const partner = new Map<number, number>();
-  if (p.tier === 1) {
-    for (const c of p.children) {
-      const b = s.entities[c].bond;
-      if (b >= 0 && s.entities[b].parent === p.id) partner.set(c, b);
-    }
-  } else if (p.tier === 2 && catalysisOn(s.config, 1)) {
+  for (const c of p.children) {
+    const b = s.entities[c].bond;
+    if (b >= 0 && s.entities[b].parent === p.id) partner.set(c, b);
+  }
+  if (p.tier > 0 && catalysisOn(s.config, p.tier - 1)) {
     for (const c of p.children) {
       if (partner.has(c)) continue;
       for (const t of p.children) {
@@ -387,7 +449,9 @@ export function memberTargets(s: WorldState, p: Entity): Map<number, [number, nu
     const tx = -dsin(a);
     const ty = dcos(a);
     const [m0, m1] = u.map((id) => s.entities[id]);
-    const half = p.tier === 1 ? [P.cellR, P.cellR] : [naturalRadius(s, m0) + DYNAMICS.pairGap / 2, naturalRadius(s, m1) + DYNAMICS.pairGap / 2];
+    // a bound pair touches; a catalyst-target pair sits just apart (inside catalysis contact)
+    const gap = m0.bond === m1.id ? 0 : DYNAMICS.pairGap / 2;
+    const half = [naturalRadius(s, m0) + gap, naturalRadius(s, m1) + gap];
     out.set(m0.id, [cx - tx * half[0], cy - ty * half[0]]);
     out.set(m1.id, [cx + tx * half[1], cy + ty * half[1]]);
   });
@@ -402,15 +466,29 @@ function settle(s: WorldState, p: Entity): void {
   }
 }
 
-/** Lock & key inside an organism: its unbound mint and violet cells pair up, greedily in child order. */
+export function pairKey(a: number, b: number): number {
+  return a < b ? a * PAIR_KEY + b : b * PAIR_KEY + a;
+}
+
+/**
+ * Lock & key inside a whole: unbound lock-pair members of the same parent pair up, greedily in child order. Each
+ * pair gets one roll (the members' level's lockChance) when it first meets as siblings; it is rolled again only after
+ * they have stopped being siblings.
+ */
 function pairWithin(s: WorldState, o: Entity): void {
-  if (o.tier !== 1 || !lockOn(s.config, 0)) return;
+  if (o.tier === 0 || !lockOn(s.config, o.tier - 1)) return;
+  const chance = DYNAMICS.lockChance[o.tier - 1];
   for (const c of o.children) {
     const a = s.entities[c];
     if (a.bond >= 0) continue;
     for (const d of o.children) {
       const b = s.entities[d];
-      if (d !== c && b.bond < 0 && isLockPair(a.type, b.type)) {
+      if (d === c || b.bond >= 0 || !isLockPair(a.type, b.type)) continue;
+      const key = pairKey(c, d);
+      const seen = s.contacts.get(key) ?? 0;
+      if (seen & CONTACT_LOCK) continue;
+      s.contacts.set(key, seen | CONTACT_LOCK);
+      if (rand(s.rng) < chance) {
         a.bond = d;
         b.bond = c;
         break;
@@ -443,12 +521,22 @@ export function aliveEntities(s: WorldState): Entity[] {
 
 // ---------------------------------------------------------------- grammar & generation
 
-function recipe(r: RngState, n: number, dominant: number, kinds: number): number[] {
+/** 'mostly': at least `share` of `dominant`, the rest drawn at random */
+function recipe(r: RngState, n: number, dominant: number, kinds: number, share: number): number[] {
   const out: number[] = [];
-  const nDom = Math.ceil(n * 0.6);
+  const nDom = Math.ceil(n * share);
   for (let i = 0; i < nDom; i++) out.push(dominant);
   for (let i = nDom; i < n; i++) out.push(randInt(r, 0, kinds - 1));
   return out.sort((a, b) => a - b);
+}
+
+/** counts per member colour -> sorted multiset */
+function fromCounts(counts: readonly number[]): number[] {
+  const out: number[] = [];
+  counts.forEach((n, t) => {
+    for (let i = 0; i < n; i++) out.push(t);
+  });
+  return out;
 }
 
 /** Size band [min, unstable) of composites at this tier: outside it they drain and fall apart. */
@@ -456,14 +544,14 @@ export function band(c: SimConfig, tier: Tier): readonly [number, number] {
   return tier === 1 ? (c.org ?? DEFAULT_ORG) : (c.herd ?? DEFAULT_HERD);
 }
 
-/** Lock & key is on, and this is its level (cells). */
+/** Lock & key is switched on and has a chance above 0 at this level. */
 export function lockOn(c: SimConfig, tier: number): boolean {
-  return tier === DYNAMICS.lockTier && c.dyn?.lock === true;
+  return c.dyn?.lock === true && (DYNAMICS.lockChance[tier] ?? 0) > 0;
 }
 
-/** Catalysis is on, and this is its level (organisms). */
+/** Catalysis is switched on and has a chance above 0 at this level. */
 export function catalysisOn(c: SimConfig, tier: number): boolean {
-  return tier === DYNAMICS.catalysisTier && c.dyn?.catalysis === true;
+  return c.dyn?.catalysis === true && (DYNAMICS.catChance[tier] ?? 0) > 0;
 }
 
 function similarOn(c: SimConfig, tier: number): boolean {
@@ -477,25 +565,45 @@ function similarPair(tier: number, a: number, b: number): boolean {
   return a === b || PAIR_RULES.similarRepel[tier] !== false;
 }
 
-function makeGrammar(r: RngState, c: SimConfig): Grammar {
+/** Recipes of every colour of organism (tier 1) or herd (tier 2), built from COMPOSITION. */
+function recipesFor(r: RngState, c: SimConfig, tier: 1 | 2): number[][][] {
+  const [min, unstable] = band(c, tier);
+  const kinds = tier === 1 ? P.nSpecies : P.nHerdKinds;
+  const memberKinds = tier === 1 ? P.nCellTypes : P.nSpecies;
+  const sizes = tier === 1 ? COMPOSITION.sizes.organism : COMPOSITION.sizes.herd;
   // recipes only use stable sizes
-  const [omin, ounst] = band(c, 1);
-  const [hmin, hunst] = band(c, 2);
-  const species: number[][][] = [];
-  for (let s = 0; s < P.nSpecies; s++) {
-    const r0 = recipe(r, randInt(r, omin, ounst - 1), s, P.nCellTypes);
-    // second realisation: different dominant cell type, so it looks different but behaves the same
-    const r1 = recipe(r, randInt(r, omin, ounst - 1), (s + 1) % P.nCellTypes, P.nCellTypes);
-    species.push([r0, r1]);
+  const fit = (n: number) => Math.min(unstable - 1, Math.max(min, Math.round(n)));
+  const out: number[][][] = [];
+  for (let k = 0; k < kinds; k++) {
+    const recipes: number[][] = [];
+    if (COMPOSITION.mode === 'custom') {
+      const table = (tier === 1 ? COMPOSITION.custom.organism : COMPOSITION.custom.herd)[k] ?? [];
+      for (const counts of table) {
+        const rc = fromCounts(counts.slice(0, memberKinds));
+        if (rc.length > 0) recipes.push(rc);
+      }
+      if (recipes.length === 0) throw new Error(`COMPOSITION.custom: no recipe for ${tier === 1 ? 'organism' : 'herd'} colour ${k}`);
+    } else {
+      for (const size of sizes) {
+        const n = fit(size);
+        if (COMPOSITION.mode === 'same') {
+          recipes.push(Array.from({ length: n }, () => k));
+        } else if (COMPOSITION.mode === 'pairs') {
+          const own = Math.ceil(n * COMPOSITION.pairShare);
+          const partner = COMPOSITION.pairs[k] ?? k;
+          recipes.push([...Array.from({ length: own }, () => k), ...Array.from({ length: n - own }, () => partner)].sort((a, b) => a - b));
+        } else {
+          recipes.push(recipe(r, n, k, memberKinds, COMPOSITION.mostlyShare));
+        }
+      }
+    }
+    out.push(recipes);
   }
-  const herds: number[][][] = [];
-  for (let k = 0; k < P.nHerdKinds; k++) {
-    // the generated realisation has more than the minimum where the band allows (4-6 organisms by default)
-    const r0 = recipe(r, randInt(r, Math.min(hmin + 1, hunst - 1), hunst - 1), k, P.nSpecies);
-    const r1 = recipe(r, randInt(r, Math.min(hmin + 1, hunst - 1), hunst - 1), (k + 2) % P.nSpecies, P.nSpecies);
-    herds.push([r0, r1]);
-  }
-  return { species, herds };
+  return out;
+}
+
+function makeGrammar(r: RngState, c: SimConfig): Grammar {
+  return { species: recipesFor(r, c, 1), herds: recipesFor(r, c, 2) };
 }
 
 function matrix(r: RngState, n: number): number[][] {
@@ -616,7 +724,7 @@ function buildHerd(s: WorldState, kind: number, realisation: number, x: number, 
 }
 
 function emptyState(config: SimConfig, rng: RngState, grammar: Grammar, laws: Laws): WorldState {
-  return { config, tick: 0, rng, nextId: 0, entities: [], grammar, laws, regions: [], isolated: -1, drag: null };
+  return { config, tick: 0, rng, nextId: 0, entities: [], grammar, laws, regions: [], isolated: -1, drag: null, contacts: new Map() };
 }
 
 function placeAwayFrom(r: RngState, pts: [number, number][], minD: number, margin: number): [number, number] {
@@ -653,7 +761,7 @@ export function createWorld(config: SimConfig): WorldState {
   for (let h = 0; h < (config.herds ?? P.nHerds); h++) {
     const [x, y] = placeAwayFrom(rng, herdPts, 480, 260);
     herdPts.push([x, y]);
-    const kind = h < 4 ? h % 2 : randInt(rng, 0, P.nHerdKinds - 1);
+    const kind = h % P.nHerdKinds; // herds cycle through the four colours
     buildHerd(s, kind, 0, x, y, rand(rng) * Math.PI * 2);
   }
   const lonePts = herdPts.slice();
@@ -1046,19 +1154,42 @@ function advance(s: WorldState, events: SimEvent[]): void {
     if (ents[s.drag.id].bond >= 0) held[ents[s.drag.id].bond] = 1;
   }
 
-  // 0. lock & key (cells only). Inside an organism its unbound mint and violet cells pair up; free ones bind
-  // when they touch (ascending id order, first match wins). Never across organisms, never free with a member.
-  const lock = lockOn(s.config, 0);
-  if (lock) {
-    for (const o of byTier[1]) pairWithin(s, o);
-    const list = byTier[0];
+  // 0a. forget encounters that are over (the pair separated, or stopped being siblings), so they can be rolled again
+  for (const [key, bits] of s.contacts) {
+    const a = ents[Math.floor(key / PAIR_KEY)];
+    const b = ents[key % PAIR_KEY];
+    if (!a || !b || !a.alive || !b.alive) {
+      s.contacts.delete(key);
+      continue;
+    }
+    if (a.parent >= 0 && a.parent === b.parent) continue; // siblings: one roll for as long as they share a parent
+    const gap = dhypot(b.x - a.x, b.y - a.y) - naturalRadius(s, a) - naturalRadius(s, b);
+    let left = bits;
+    if (left & CONTACT_LOCK && gap > 2 * DYNAMICS.bindMargin[a.tier]) left &= ~CONTACT_LOCK;
+    if (left & CONTACT_CAT && gap > 2 * DYNAMICS.catMargin[a.tier]) left &= ~(CONTACT_CAT | CONTACT_CAT_OK);
+    if (left) s.contacts.set(key, left);
+    else s.contacts.delete(key);
+  }
+
+  // 0b. lock & key, every level. Inside a whole, unbound lock-pair members pair up (one roll per sibling pair); two
+  // free, unbound ones that start touching get one roll (ascending id order). Never across levels, never across
+  // wholes, never a free thing with a member.
+  for (let t = 0; t < 3; t++) {
+    if (!lockOn(s.config, t)) continue;
+    if (t < 2) for (const p of byTier[t + 1]) pairWithin(s, p);
+    const list = byTier[t];
     for (let i = 0; i < list.length; i++) {
       const a = list[i];
       if (a.parent >= 0 || a.bond >= 0 || held[a.id]) continue;
       for (let j = i + 1; j < list.length; j++) {
         const b = list[j];
         if (b.parent >= 0 || b.bond >= 0 || held[b.id] || !isLockPair(a.type, b.type)) continue;
-        if (dhypot(b.x - a.x, b.y - a.y) < rad[a.id] + rad[b.id] + DYNAMICS.bindMargin) {
+        if (dhypot(b.x - a.x, b.y - a.y) >= rad[a.id] + rad[b.id] + DYNAMICS.bindMargin[t]) continue;
+        const key = pairKey(a.id, b.id);
+        const seen = s.contacts.get(key) ?? 0;
+        if (seen & CONTACT_LOCK) continue; // already rolled for this encounter
+        s.contacts.set(key, seen | CONTACT_LOCK);
+        if (rand(s.rng) < DYNAMICS.lockChance[t]) {
           a.bond = b.id;
           b.bond = a.id;
           break;
@@ -1066,7 +1197,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
       }
     }
   }
-  // organisms touched by a catalyst this tick (catalysis: organisms only, full strength wherever they are)
+  // things a catalyst is spinning this tick (a successful encounter that is still in contact)
   const catTouched = new Uint8Array(n);
 
   // 1. same-tier interactions (+ crowding for cells)
@@ -1108,27 +1239,42 @@ function advance(s: WorldState, events: SimEvent[]): void {
             fb += sim;
           }
         }
-        if (catalysisOn(s.config, t) && d < rad[a.id] + rad[b.id] + DYNAMICS.catMargin) {
-          // catalysis: a touching catalyst makes its target spin
-          if (catalyses(a.type, b.type)) catTouched[b.id] = 1;
-          if (catalyses(b.type, a.type)) catTouched[a.id] = 1;
+        const ab = catalyses(a.type, b.type);
+        const ba = catalyses(b.type, a.type);
+        if ((ab || ba) && catalysisOn(s.config, t) && d < rad[a.id] + rad[b.id] + DYNAMICS.catMargin[t]) {
+          // catalysis: one roll per encounter; if it succeeded, the target spins for as long as they touch.
+          // No roll while either is held by the pointer (as for lock & key): sliding a dragged thing in and out of
+          // contact would otherwise roll again and again. The roll happens once it is let go, if they still touch.
+          const key = pairKey(a.id, b.id);
+          let seen = s.contacts.get(key) ?? 0;
+          if (!(seen & CONTACT_CAT) && !held[a.id] && !held[b.id]) {
+            seen |= CONTACT_CAT;
+            if (rand(s.rng) < DYNAMICS.catChance[t]) seen |= CONTACT_CAT_OK;
+            s.contacts.set(key, seen);
+          }
+          if (seen & CONTACT_CAT_OK) {
+            if (ab) catTouched[b.id] = 1;
+            if (ba) catTouched[a.id] = 1;
+          }
+        }
+        const lock = lockOn(s.config, t);
+        if (
+          lock && drift && d < DYNAMICS.lockAttractR[t] && a.parent < 0 && b.parent < 0 && a.bond < 0 && b.bond < 0 &&
+          isLockPair(a.type, b.type) && !((s.contacts.get(pairKey(a.id, b.id)) ?? 0) & CONTACT_LOCK)
+        ) {
+          // two loose, unbound lock-pair things near each other pull gently together, so they meet and roll.
+          // Once this encounter has been rolled (and failed), the pull stops until they have separated.
+          const k = DYNAMICS.lockAttract[t] * (1 - d / DYNAMICS.lockAttractR[t]);
+          fa += k;
+          fb += k;
+        }
+        if (lock && DYNAMICS.lockRepel[t] > 0 && d < DYNAMICS.lockRepelR) {
+          // a bound thing mildly pushes away everything at its level except its partner, so pairs don't clump
+          const k = DYNAMICS.lockRepel[t] * (1 - d / DYNAMICS.lockRepelR);
+          if (a.bond >= 0 && a.bond !== b.id) fb -= k;
+          if (b.bond >= 0 && b.bond !== a.id) fa -= k;
         }
         if (t === 0) {
-          if (
-            lock && drift && d < DYNAMICS.lockAttractR && a.parent < 0 && b.parent < 0 &&
-            a.bond < 0 && b.bond < 0 && isLockPair(a.type, b.type)
-          ) {
-            // two loose, unbound lock-pair cells near each other pull gently together, so they find each other and bind
-            const k = DYNAMICS.lockAttract * (1 - d / DYNAMICS.lockAttractR);
-            fa += k;
-            fb += k;
-          }
-          if (lock && d < DYNAMICS.lockRepelR) {
-            // a bound cell mildly pushes away every cell except its partner, so pairs don't clump
-            const k = DYNAMICS.lockRepel * (1 - d / DYNAMICS.lockRepelR);
-            if (a.bond >= 0 && a.bond !== b.id) fb -= k;
-            if (b.bond >= 0 && b.bond !== a.id) fa -= k;
-          }
           if (d < P.stressR && (a.parent < 0 || a.parent !== b.parent)) {
             const c = 1 - d / P.stressR;
             crowd[a.id] += c;
@@ -1272,8 +1418,10 @@ function advance(s: WorldState, events: SimEvent[]): void {
     const dy = b.y - a.y;
     const d = dhypot(dx, dy) || 1e-6;
     const ext = d - (rad[a.id] + rad[b.id]);
-    const Fx = DYNAMICS.bondK * ext * (dx / d) + DYNAMICS.bondC * (b.vx - a.vx);
-    const Fy = DYNAMICS.bondK * ext * (dy / d) + DYNAMICS.bondC * (b.vy - a.vy);
+    const k = DYNAMICS.bondK[a.tier];
+    const c = DYNAMICS.bondC[a.tier];
+    const Fx = k * ext * (dx / d) + c * (b.vx - a.vx);
+    const Fy = k * ext * (dy / d) + c * (b.vy - a.vy);
     fx[a.id] += Fx;
     fy[a.id] += Fy;
     fx[b.id] -= Fx;
@@ -1319,12 +1467,10 @@ function advance(s: WorldState, events: SimEvent[]): void {
   // 6. integrate (all tiers at the same fixed rate)
   for (const e of ents) {
     if (!on(e)) continue;
-    if (e.tier === 1) {
-      // catalysed spin: full speed while a catalyst touches, then winding down over ~2 s
-      if (catTouched[e.id]) e.spin = Math.max(e.spin, DYNAMICS.catSpin);
-      else if (e.spin > 0) e.spin = e.spin * DYNAMICS.catDecay < DYNAMICS.catStop ? 0 : e.spin * DYNAMICS.catDecay;
-      e.angle += e.spin * P.dt;
-    }
+    // catalysed spin (any level): full speed while a successful catalyst contact lasts, then winding down over ~2 s
+    if (catTouched[e.id]) e.spin = Math.max(e.spin, DYNAMICS.catSpin[e.tier]);
+    else if (e.spin > 0) e.spin = e.spin * DYNAMICS.catDecay < DYNAMICS.catStop ? 0 : e.spin * DYNAMICS.catDecay;
+    e.angle += e.spin * P.dt;
     if (held[e.id]) {
       e.vx = 0;
       e.vy = 0;
@@ -1389,5 +1535,6 @@ export function snapshotWorld(s: WorldState): unknown {
     drag: s.drag,
     regions: s.regions,
     entities: s.entities.filter((e) => e.alive),
+    contacts: [...s.contacts].sort((a, b) => a[0] - b[0]),
   }));
 }

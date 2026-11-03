@@ -103,7 +103,7 @@ export class Renderer {
       if (!a || !b) continue;
       this.gRegion.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2 * px, color: sk.ui, alpha: 0.5 * dim(e) });
     }
-    // catalysis turns organisms: show their orientation when it is on
+    // catalysis turns things: show the orientation of organisms and herds at levels where it is on
     const spinMark = (t: number) => catalysisOn(s.config, t);
 
     for (const e of s.entities) {
@@ -121,6 +121,7 @@ export class Renderer {
         } else {
           this.gHerd.circle(n.x, n.y, n.r).stroke({ width: 1.5 * px, color: col, alpha: sk.herdStroke * a });
         }
+        if (spinMark(2)) rimMark(this.gHerd, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.06, 3 * px), col, a);
         if (e.health < 1) this.healthBar(this.gHerd, n.x, n.y - n.r - 6 * px, Math.max(n.r * 0.6, 20 * px), e.health, sk, a);
       } else if (e.tier === 1) {
         const col = sk.species[e.type];
@@ -132,17 +133,19 @@ export class Renderer {
         const w = Math.max(n.r * 1.3, 14 * px);
         this.healthBar(this.gOrg, n.x, n.y - n.r - w * 0.15 - 2 * px, w, e.health, sk, a);
       } else {
-        const stressT = Math.min(1, e.signal / 0.6) * 0.65;
-        const col = lerpColor(sk.cell[e.type], sk.stress, stressT);
+        // stress: the cell darkens and flickers (red is an element colour, so no red tint)
+        const stressT = Math.min(1, e.signal / 0.6);
+        const col = lerpColor(sk.cell[e.type], 0x000000, stressT * 0.55);
+        const flicker = 1 - 0.4 * stressT * (0.5 + 0.5 * Math.sin(v.time * 12 + e.id));
         const r = Math.max(n.r, 0.6 * px);
         if (sk.wobble > 0) {
-          this.gCell.circle(n.x, n.y, r).fill({ color: col, alpha: 0.3 * a });
-          this.gCell.circle(n.x, n.y, r).stroke({ width: r * 0.22, color: col, alpha: sk.cellAlpha * a });
-          glyph(this.gCell, sk.nucleus[e.type], n.x, n.y, r * 0.48, e.angle);
-          this.gCell.fill({ color: col, alpha: a });
+          this.gCell.circle(n.x, n.y, r).fill({ color: col, alpha: 0.3 * a * flicker });
+          this.gCell.circle(n.x, n.y, r).stroke({ width: r * 0.22, color: col, alpha: sk.cellAlpha * a * flicker });
+          glyph(this.gCell, sk.nucleus[e.type], n.x, n.y, r * 0.55, e.angle);
+          this.gCell.fill({ color: col, alpha: a * flicker });
         } else {
           glyph(this.gCell, sk.glyph[e.type], n.x, n.y, r, e.angle);
-          this.gCell.fill({ color: col, alpha: a });
+          this.gCell.fill({ color: col, alpha: a * flicker });
         }
       }
     }
@@ -235,11 +238,22 @@ function glyph(g: Graphics, kind: Glyph, x: number, y: number, r: number, angle 
     g.circle(x, y, r);
     return;
   }
-  const k = kind === 'triangle' ? 3 : 6;
-  const rr = kind === 'triangle' ? r * 1.25 : r * 1.05;
   const pts: number[] = [];
+  if (kind === 'star') {
+    // five points, alternating outer and inner radius
+    for (let i = 0; i < 10; i++) {
+      const rr = i % 2 === 0 ? r * 1.3 : r * 0.55;
+      const th = -Math.PI / 2 + angle + (Math.PI * i) / 5;
+      pts.push(x + rr * Math.cos(th), y + rr * Math.sin(th));
+    }
+    g.poly(pts, true);
+    return;
+  }
+  const k = kind === 'triangle' ? 3 : kind === 'square' ? 4 : 6;
+  const rr = kind === 'triangle' ? r * 1.25 : kind === 'square' ? r * 1.15 : r * 1.05;
+  const start = kind === 'square' ? -Math.PI / 4 : -Math.PI / 2; // square sits flat
   for (let i = 0; i < k; i++) {
-    const th = -Math.PI / 2 + angle + (2 * Math.PI * i) / k;
+    const th = start + angle + (2 * Math.PI * i) / k;
     pts.push(x + rr * Math.cos(th), y + rr * Math.sin(th));
   }
   g.poly(pts, true);

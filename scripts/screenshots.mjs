@@ -77,7 +77,7 @@ for (const hier of [1, 0]) {
   await page.close();
 }
 
-// mechanisms (lock & key between cells, catalysis between organisms; both on by default), contents always shown
+// mechanisms (lock & key: purple + green; catalysis: light blue makes red spin; every level, by chance), contents always shown
 {
   const page = await openSandbox('?seed=42&debug=1&short=1&reveal=0');
   await page.waitForTimeout(3000);
@@ -101,7 +101,7 @@ for (const hier of [1, 0]) {
     return { x: e.x, y: e.y, parent: e.parent, bond: e.bond, spin: e.spin, alive: e.alive };
   }, id);
 
-  // an organism with a lock & key pair inside, and a herd with a catalyst + target pair
+  // an organism with a lock & key pair inside, and a herd with a catalyst + target pair (only with mixed recipes)
   const inside = await page.evaluate(() => {
     const s = window.__sandbox.state;
     const org = s.entities.find((e) => e.alive && e.tier === 1 && e.children.some((c) => s.entities[c].bond >= 0));
@@ -122,13 +122,13 @@ for (const hier of [1, 0]) {
   }
   console.log('organism with a lock pair inside:', inside.org?.id, '| herd with a spinning target, member spins:', inside.herd?.spin);
 
-  // drop a loose mint cell next to a loose violet one: they bind (no key needed to *see* lock & key)
+  // drop a loose purple cell next to a loose green one: they bind (90% of encounters at cell level)
   const pair = await page.evaluate(() => {
     const s = window.__sandbox.state;
     const free = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0 && e.bond < 0);
     let best = null;
-    for (const a of free.filter((e) => e.type === 0))
-      for (const b of free.filter((e) => e.type === 1)) {
+    for (const a of free.filter((e) => e.type === 1))
+      for (const b of free.filter((e) => e.type === 3)) {
         const d = Math.hypot(a.x - b.x, a.y - b.y);
         if (!best || d < best.d) best = { a: a.id, b: b.id, d };
       }
@@ -145,24 +145,32 @@ for (const hier of [1, 0]) {
   await page.waitForTimeout(800);
   await page.locator('[data-speed="0"]').click();
   A = await ent(pair.a);
-  console.log(`dropped mint #${pair.a} beside violet #${pair.b} (no key): bond ${A.bond}, parent ${A.parent}`);
+  console.log(`dropped purple #${pair.a} beside green #${pair.b}: bond ${A.bond}, parent ${A.parent}`);
   await look(A.x, A.y, 6);
   await page.waitForTimeout(250);
   await page.screenshot({ path: `${OUT}/mech_lock_bound_pair.png` });
 
-  // drop a lone sky-blue organism against a lone rose one: the rose one spins, and keeps spinning a while after
+  // drop a lone light blue organism against a lone red one: the red one spins (90% of encounters), and keeps spinning a while after
   const orgs = await page.evaluate(() => {
     const s = window.__sandbox.state;
     const lone = s.entities.filter((e) => e.alive && e.tier === 1 && e.parent < 0);
-    const cat = lone.find((e) => e.type === 0);
-    const tgt = lone.find((e) => e.type === 1);
-    return cat && tgt ? { cat: cat.id, tgt: tgt.id } : null;
+    // a catalyst with no loose cell over its centre, so one click there selects the organism itself
+    const clear = (o) => !s.entities.some((c) => c.alive && c.tier === 0 && c.parent < 0 && Math.hypot(c.x - o.x, c.y - o.y) < 15);
+    // the closest such pair, so both fit on screen
+    let best = null;
+    for (const cat of lone.filter((e) => e.type === 0 && clear(e)))
+      for (const tgt of lone.filter((e) => e.type === 2)) {
+        const d = Math.hypot(cat.x - tgt.x, cat.y - tgt.y);
+        if (!best || d < best.d) best = { cat: cat.id, tgt: tgt.id, d };
+      }
+    return best;
   });
   if (orgs) {
     const T = await ent(orgs.tgt);
     const Cg = await ent(orgs.cat);
     // frame both organisms so the catalyst can be clicked
-    await look((T.x + Cg.x) / 2, (T.y + Cg.y) / 2, Math.min(2.5, 1100 / Math.max(Math.hypot(T.x - Cg.x, T.y - Cg.y), 1)));
+    // keep both well inside the canvas (clear of the banner and the controls legend)
+    await look((T.x + Cg.x) / 2, (T.y + Cg.y) / 2, Math.min(2.5, 550 / Math.max(Math.hypot(T.x - Cg.x, T.y - Cg.y), 1)));
     await page.waitForTimeout(200);
     const [cx, cy] = await screenPos(page, orgs.cat);
     // select the catalyst organism: its centre has no cell on it, so one click selects the organism itself
@@ -184,9 +192,9 @@ for (const hier of [1, 0]) {
     }, { c: orgs.cat, t: orgs.tgt });
     console.log('catalysis demo debug', JSON.stringify(dbg), 'aimed gap', rT);
     await page.screenshot({ path: `${OUT}/mech_catalysis_touch.png` });
-    console.log(`sky-blue #${orgs.cat} dropped against rose #${orgs.tgt}: rose spin ${during.toFixed(2)} rad/s`);
+    console.log(`light blue #${orgs.cat} dropped against red #${orgs.tgt}: red spin ${during.toFixed(2)} rad/s`);
   } else {
-    console.log('no lone sky-blue + rose organisms in this seed: catalysis touch demo skipped');
+    console.log('no lone light blue + red organisms in this seed: catalysis touch demo skipped');
   }
 
   // drop a loose cell onto the middle of a herd: collision between levels pushes it back out

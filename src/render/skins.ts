@@ -2,7 +2,7 @@
 
 import type { Skin } from '../config';
 
-export type Glyph = 'circle' | 'triangle' | 'hexagon';
+export type Glyph = 'circle' | 'triangle' | 'square' | 'star' | 'hexagon';
 
 export interface SkinDef {
   bg: number;
@@ -17,6 +17,7 @@ export interface SkinDef {
   /** per herd kind: boundary colour */
   herd: number[];
   herdNames: string[];
+  /** low end of health bars and the flash ring (stressed cells darken instead of changing colour) */
   stress: number;
   cellAlpha: number;
   membraneFill: number;
@@ -33,14 +34,15 @@ export interface SkinDef {
 export const SKINS: Record<Skin, SkinDef> = {
   biology: {
     bg: 0x081218,
-    cell: [0x5ef2c9, 0xc77dff, 0xffb84d],
-    cellNames: ['mint', 'violet', 'amber'],
-    nucleus: ['circle', 'triangle', 'hexagon'],
-    glyph: ['circle', 'circle', 'circle'],
-    species: [0x3fa7d6, 0xe86a92, 0x9bd65b],
-    speciesNames: ['sky-blue membrane', 'rose membrane', 'lime membrane'],
-    herd: [0x8fd3ff, 0xf3c6ff],
-    herdNames: ['pale-blue haze', 'pale-pink haze'],
+    // four colours at every level: light blue, purple, red, green. Only cells carry a shape.
+    cell: [0x7fd6ff, 0xb68cff, 0xff5c5c, 0x6fdc7a],
+    cellNames: ['light blue', 'purple', 'red', 'green'],
+    nucleus: ['circle', 'triangle', 'square', 'star'],
+    glyph: ['circle', 'circle', 'circle', 'circle'],
+    species: [0x5cc4f5, 0xa073f5, 0xf04a4a, 0x52c965],
+    speciesNames: ['light blue', 'purple', 'red', 'green'],
+    herd: [0xa8e4ff, 0xd2b8ff, 0xff9c9c, 0xa6ecb0],
+    herdNames: ['light blue', 'purple', 'red', 'green'],
     stress: 0xff3b30,
     cellAlpha: 0.75,
     membraneFill: 0.14,
@@ -55,14 +57,15 @@ export const SKINS: Record<Skin, SkinDef> = {
   },
   abstract: {
     bg: 0xf3f3ef,
-    cell: [0x1f77b4, 0xd62728, 0x2ca02c],
-    cellNames: ['blue', 'red', 'green'],
-    nucleus: ['circle', 'circle', 'circle'],
-    glyph: ['circle', 'triangle', 'hexagon'],
-    species: [0x9467bd, 0x8c564b, 0x17becf],
-    speciesNames: ['purple outline', 'brown outline', 'cyan outline'],
-    herd: [0x333333, 0x888888],
-    herdNames: ['dark outline', 'grey outline'],
+    // the same four colours, deeper for the light background
+    cell: [0x2b9bd8, 0x7b4fc9, 0xd63b3b, 0x2e9e4a],
+    cellNames: ['light blue', 'purple', 'red', 'green'],
+    nucleus: ['circle', 'circle', 'circle', 'circle'],
+    glyph: ['circle', 'triangle', 'square', 'star'],
+    species: [0x2b9bd8, 0x7b4fc9, 0xd63b3b, 0x2e9e4a],
+    speciesNames: ['light blue', 'purple', 'red', 'green'],
+    herd: [0x2b9bd8, 0x7b4fc9, 0xd63b3b, 0x2e9e4a],
+    herdNames: ['light blue', 'purple', 'red', 'green'],
     stress: 0xff7f0e,
     cellAlpha: 1,
     membraneFill: 0.08,
