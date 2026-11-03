@@ -96,6 +96,15 @@ for (const hier of [1, 0]) {
     if (pressC) await page.keyboard.press('c');
     await page.mouse.up();
   };
+  /** drag entity `id` (already selected) onto world point (wx, wy) and keep holding it; returns a release function */
+  const dragHold = async (id, wx, wy) => {
+    const [x, y] = await screenPos(page, id);
+    const [tx, ty] = await page.evaluate(([wx, wy]) => window.__sandbox.worldToScreen(wx, wy), [wx, wy]);
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i++) await page.mouse.move(x + ((tx - x) * i) / 10, y + ((ty - y) * i) / 10);
+    return () => page.mouse.up();
+  };
   const ent = (id) => page.evaluate((id) => {
     const e = window.__sandbox.state.entities[id];
     return { x: e.x, y: e.y, parent: e.parent, bond: e.bond, spin: e.spin, alive: e.alive };
@@ -122,7 +131,8 @@ for (const hier of [1, 0]) {
   }
   console.log('organism with a lock pair inside:', inside.org?.id, '| herd with a spinning target, member spins:', inside.herd?.spin);
 
-  // drop a loose purple cell next to a loose green one: they bind (90% of encounters at cell level)
+  // drag a loose purple cell into range of a loose green one (time running): a line links them while the roll is
+  // revealed, then they snap together and the green follows the drag (90% of encounters at cell level)
   const pair = await page.evaluate(() => {
     const s = window.__sandbox.state;
     const free = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0 && e.bond < 0);
@@ -140,17 +150,19 @@ for (const hier of [1, 0]) {
   await page.waitForTimeout(200);
   const [ax, ay] = await screenPos(page, pair.a);
   await page.mouse.click(ax, ay);
-  await dragTo(pair.a, B.x - 11, B.y);
   await page.locator('[data-speed="1"]').click();
-  await page.waitForTimeout(800);
-  await page.locator('[data-speed="0"]').click();
+  B = await ent(pair.b);
+  let release = await dragHold(pair.a, B.x - 16, B.y);
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: `${OUT}/mech_lock_roll.png` });
+  await page.waitForTimeout(700);
   A = await ent(pair.a);
-  console.log(`dropped purple #${pair.a} beside green #${pair.b}: bond ${A.bond}, parent ${A.parent}`);
-  await look(A.x, A.y, 6);
-  await page.waitForTimeout(250);
   await page.screenshot({ path: `${OUT}/mech_lock_bound_pair.png` });
+  console.log(`dragged purple #${pair.a} into range of green #${pair.b} (still held): bond ${A.bond}`);
+  await release();
+  await page.locator('[data-speed="0"]').click();
 
-  // drop a lone light blue organism against a lone red one: the red one spins (90% of encounters), and keeps spinning a while after
+  // drag a lone light blue organism into range of a lone red one (time running): a line, then the red one spins (90%)
   const orgs = await page.evaluate(() => {
     const s = window.__sandbox.state;
     const lone = s.entities.filter((e) => e.alive && e.tier === 1 && e.parent < 0);
@@ -180,9 +192,16 @@ for (const hier of [1, 0]) {
       const r = (e) => 6 + 2.4 * e.children.length + 9;
       return r(s.entities[c]) + r(s.entities[t]) + 4;
     }, { c: orgs.cat, t: orgs.tgt });
-    await dragTo(orgs.cat, T.x - rT, T.y);
     await page.locator('[data-speed="1"]').click();
-    await page.waitForTimeout(600);
+    const T2 = await ent(orgs.tgt);
+    release = await dragHold(orgs.cat, T2.x - rT, T2.y);
+    // the target keeps wandering while time runs: finish the drag where it is now
+    const T3 = await ent(orgs.tgt);
+    const [fx, fy] = await page.evaluate(([wx, wy]) => window.__sandbox.worldToScreen(wx, wy), [T3.x - rT, T3.y]);
+    await page.mouse.move(fx, fy);
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: `${OUT}/mech_catalysis_roll.png` });
+    await page.waitForTimeout(700);
     const during = (await ent(orgs.tgt)).spin;
     const dbg = await page.evaluate(({ c, t }) => {
       const s = window.__sandbox.state;
@@ -192,7 +211,8 @@ for (const hier of [1, 0]) {
     }, { c: orgs.cat, t: orgs.tgt });
     console.log('catalysis demo debug', JSON.stringify(dbg), 'aimed gap', rT);
     await page.screenshot({ path: `${OUT}/mech_catalysis_touch.png` });
-    console.log(`light blue #${orgs.cat} dropped against red #${orgs.tgt}: red spin ${during.toFixed(2)} rad/s`);
+    await release();
+    console.log(`light blue #${orgs.cat} dragged into range of red #${orgs.tgt} (still held): red spin ${during.toFixed(2)} rad/s`);
   } else {
     console.log('no lone light blue + red organisms in this seed: catalysis touch demo skipped');
   }

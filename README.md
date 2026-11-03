@@ -44,6 +44,7 @@ Quick test link: `http://localhost:5173/?seed=42&short=1&debug=1`
 | `herds` | 0..12                     | `7`        | number of herds (hazes) at the start |
 | `lone`  | 0..40                     | `18`       | number of lone organisms (membranes) at the start |
 | `same`  | `0` \| `1`                | `0`        | `0`: same-colour cells never attract each other through the laws (same-colour repulsion and all other laws stay). `1`: the seed decides, as before |
+| `chance` | `graded` \| `uniform` \| `none` | `graded` | how likely lock & key and catalysis are per encounter. `graded`: the per-level tables `DYNAMICS.lockChance` / `catChance` (lock 90 / 40 / 10 %, catalysis 40 / 90 / 10 % for cells / organisms / herds). `uniform`: the mean of each table at every level (both 46.7 %). `none`: 0 everywhere, no interactions at all, so composition is the only mechanism (also no pre-binding pull or bound-cell push). Laws and similarity are separate switches |
 | `short` | `1`                       | off        | Explore phase lasts 60 s instead of 6 min |
 | `debug` | `1`                       | off        | HUD (tick, hash, fps), entity labels, `S` = swap realisation, "skip ▸" phase button, `window.__sandbox` test hook |
 
@@ -66,7 +67,8 @@ for one run. To change a default, or to change *which* elements interact and *ho
 | how likely lock & key is at each level | `DYNAMICS.lockChance` `[cells, organisms, herds]` | `0` switches that level off |
 | which type makes which spin (catalysis) | `DYNAMICS.catalysis` | `[catalyst, target]` |
 | how likely catalysis is at each level | `DYNAMICS.catChance` `[cells, organisms, herds]` | `0` switches that level off |
-| strengths of lock & key, catalysis, similarity | `DYNAMICS` (`bondK`, `bindMargin`, `lockAttract`, `lockRepel`, `catMargin`, `catSpin`, `catDecay`, `simGain`, ...) | per level `[cells, organisms, herds]`; each has a comment |
+| how near is "near" (interaction range), how far is "apart", how long the roll is shown | `DYNAMICS.rangeMargin`, `DYNAMICS.apartMargin`, `DYNAMICS.revealTicks` | per level `[cells, organisms, herds]`; ticks are 1/30 s |
+| strengths of lock & key, catalysis, similarity | `DYNAMICS` (`bondK`, `lockAttract`, `lockRepel`, `catSpin`, `catDecay`, `simGain`, ...) | per level `[cells, organisms, herds]`; each has a comment |
 | **exactly which pairs attract or repel (the laws)** | `PAIR_RULES.laws` in `src/sim/world.ts` | `null` = left to the seed |
 | **exactly which types take part in similarity** | `PAIR_RULES.similarTypes`, `PAIR_RULES.similarRepel` | |
 | ranges and overall strength of the laws, contact repulsion | `P.rmin`, `P.rmax`, `P.gain`, `P.repel` in `src/sim/world.ts` | per level `[cells, organisms, herds]` |
@@ -263,6 +265,7 @@ Download: `levels-sandbox-<seed>-<ISO timestamp>.json`. A copy is kept in `local
 | `organism_death` | `{id, cause: "health"\|"empty"\|"size", cells}` (`size`: it fell apart outside its size band) |
 | `founded` | `{id, tier, type, realisation, members}` when a `combine` creates a new organism/herd |
 | `herd_dissolved` | `{id}` when emptied; `{id, cause: "size", organisms}` when it fell apart outside its size band |
+| `encounter` | `{rule: "lock"\|"catalysis", tier, a, b, ok}`: a roll took effect after its reveal; `ok` = they bound / the target started spinning (false if the roll failed or they left range in time) |
 | `region_depleted`, `swapped` | sim events |
 | `phase` | `{from, to, index}` |
 | `notebook` | diff: `create`, `rename{from,to}`, `delete{reparented}`, `add_example{entity}`, `remove_example`, `set_parent{from,to}` |
@@ -322,15 +325,27 @@ Where the brief left something open, I chose the following.
 The rules are kept in `DYNAMICS` in `src/sim/world.ts`. Lock & key and catalysis act at **every level**, but only ever
 between two things of the **same** level (a cell never binds to or spins an organism). How likely they are is graded by level.
 
-**Chance per encounter.** When two eligible things start touching, one roll decides whether the rule fires. If it fails,
-nothing happens for as long as they stay in contact. Only after they separate (gap beyond twice the contact margin) can a new
-encounter roll again. Members of the same whole get one roll when they first become siblings. Rolls use the seeded random
-generator in a fixed order, so runs replay exactly. A chance of `0` switches the rule off at that level.
+**Chance per encounter.** Two eligible things of the same level are **near** when the gap between their edges is below
+`rangeMargin` (10 / 20 / 60 units for cells / organisms / herds). The moment they come near, also while one of them is
+being dragged, the dice are rolled **once** for each rule that applies. They then have to **move apart** (gap above
+`apartMargin`: 20 / 40 / 120) and come near again before they can roll again; wiggling in between never re-rolls. Members of
+the same whole get one roll when they first become siblings. Rolls use the seeded random generator in a fixed order, so runs
+replay exactly. The chances depend on the `chance` condition (`graded` tables, `uniform` means, or `none`); a chance of `0`
+switches the rule off at that level.
+
+**What participants see.** As soon as the dice are rolled, a **line links the two** (white for lock & key, the catalyst's
+colour for catalysis). It grows out from the middle and pulses for `revealTicks` (0.4 s), then the result takes effect:
+- lock & key: they **snap together** and the line tightens into the bond. If one of them is being dragged, the other comes
+  along with the drag;
+- catalysis: the line fades and the target **starts spinning**, for as long as the two stay near;
+- failure, or the pair left range before the reveal ended: the line **breaks**. The two halves pull back and fade.
+
+Each result is logged as an `encounter` event.
 
 | mechanism | rule | chance per encounter (cells / organisms / herds) | other settings |
 |---|---|---|---|
-| lock & key | A purple and a green thing **bind** when two free, unbound ones of the same level touch (gap < 4 / 8 / 20 units). Before that, two free, unbound ones **pull gently together** (within 40 / 90 / 260 units; strength 50 / 20 / 8 at contact; needs `move=1`). The pull stops once their encounter has been rolled. A spring holds a bound pair touching, and it is dragged as one. Only Shift-drag separates them. Inside a whole (possible only with mixed recipes), unbound purple and green members pair up. A pair stays attached when it joins or combines, and sits together on its parent's ring. A bound cell **mildly pushes away other cells** within 30 units, so pairs don't clump | **90 % / 40 % / 10 %** | bond spring 60 / 30 / 8 |
-| catalysis | A light blue thing touching a red one of the same level (gap < 6 / 12 / 30) makes the red one **spin** for as long as they touch. After contact ends it keeps spinning, slowing by 4 % per tick, and stops ~2 s later. A spinning cell turns its shape; a spinning organism or herd turns its ring of members, with a rim dot showing its orientation. Inside a whole (mixed recipes only), a catalyst and its target sit together | **40 % / 90 % / 10 %** | spin 3 / 3 / 1 rad/s |
+| lock & key | A purple and a green thing **bind** when two free, unbound ones of the same level come near and the roll succeeds. Before that, two free, unbound ones **pull gently together** (within 40 / 90 / 260 units; strength 50 / 20 / 8 at contact; needs `move=1`). The pull stops once their encounter has been rolled. A spring holds a bound pair touching, and it is dragged as one. Only Shift-drag separates them. Inside a whole (possible only with mixed recipes), unbound purple and green members pair up. A pair stays attached when it joins or combines, and sits together on its parent's ring. A bound cell **mildly pushes away other cells** within 30 units, so pairs don't clump | **90 % / 40 % / 10 %** | bond spring 60 / 30 / 8 |
+| catalysis | A light blue thing near a red one of the same level makes the red one **spin**, if the roll succeeds, for as long as they stay near. After contact ends it keeps spinning, slowing by 4 % per tick, and stops ~2 s later. A spinning cell turns its shape; a spinning organism or herd turns its ring of members, with a rim dot showing its orientation. Inside a whole (mixed recipes only), a catalyst and its target sit together | **40 % / 90 % / 10 %** | spin 3 / 3 / 1 rad/s |
 | similarity | like types attract, unlike types repel, with the same kernel as the laws. Purple–green pairs are exempt from the repulsion while lock is on | – (a force, always on where switched on) | gain 45 / 18 / 20 |
 
 The encounters already rolled for are world state (`contacts`). Like `bond` and `spin`, they are hashed and in snapshots.

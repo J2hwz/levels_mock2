@@ -1,8 +1,8 @@
 // All experiment dials + URL-param parsing.
 // ?hier=1|0&size=proxy|irrelevant&skin=biology|abstract&seed=42&eps=0.05&move=1|0&laws=1|0&wander=1&reveal=1|0
-//  &lock=1|0&catalysis=1|0&similar=0,1,2|all&org=5-8&herd=3-7&free=140&herds=7&lone=18&same=0|1&short=1&debug=1
+//  &lock=1|0&catalysis=1|0&similar=0,1,2|all&org=5-8&herd=3-7&free=140&herds=7&lone=18&same=0|1&chance=graded|uniform|none&short=1&debug=1
 
-import type { Dynamics, SimConfig } from './sim/world';
+import type { ChanceMode, Dynamics, SimConfig } from './sim/world';
 
 export type SizeMode = 'proxy' | 'irrelevant';
 export type Skin = 'biology' | 'abstract';
@@ -37,6 +37,8 @@ export interface Config {
   lone: number;
   /** same-colour cells may attract each other through the seed-drawn laws */
   same: boolean;
+  /** how likely lock & key and catalysis are per level: per-level tables / their mean everywhere / never */
+  chance: ChanceMode;
   short: boolean;
   debug: boolean;
   /** duration of the Explore phase */
@@ -48,6 +50,7 @@ export interface Config {
 // =====================================================================================================
 // TUNE: the app's defaults. Each can be overridden for one run in the URL (see README "URL parameters").
 //   mechanisms on/off ... laws, same, lock, catalysis (similar: see parseConfig, `levels(q.get('similar'))`)
+//   chance condition ... chance: 'graded' (DYNAMICS tables) | 'uniform' (mean of each table) | 'none' (no interactions)
 //   movement ........... move, wander
 //   size bands ......... org, herd
 //   starting world ..... free, herds, lone
@@ -70,6 +73,7 @@ export const DEFAULTS = {
   herds: 7,
   lone: 18,
   same: false,
+  chance: 'graded' as ChanceMode,
   exploreMs: 6 * 60 * 1000,
   shortExploreMs: 60 * 1000,
 };
@@ -141,6 +145,7 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
     herds: count(q.get('herds'), DEFAULTS.herds, 0, 12),
     lone: count(q.get('lone'), DEFAULTS.lone, 0, 40),
     same: bool(q.get('same'), DEFAULTS.same),
+    chance: (['graded', 'uniform', 'none'] as const).find((m) => m === q.get('chance')) ?? DEFAULTS.chance,
     short,
     debug: bool(q.get('debug'), false),
     exploreMs: short ? DEFAULTS.shortExploreMs : DEFAULTS.exploreMs,
@@ -150,5 +155,5 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
 
 export function simConfigOf(c: Pick<Config, 'hier' | 'eps' | 'seed'> & Partial<Config>): SimConfig {
   const dyn: Dynamics = { lock: c.lock ?? DEFAULTS.lock, catalysis: c.catalysis ?? DEFAULTS.catalysis, similar: c.similar ?? [false, false, false] };
-  return { hier: c.hier, eps: c.eps, seed: c.seed, move: c.move ?? true, laws: c.laws ?? true, wander: c.wander ?? DEFAULTS.wander, dyn, org: c.org ?? DEFAULTS.org, herd: c.herd ?? DEFAULTS.herd, free: c.free ?? DEFAULTS.free, herds: c.herds ?? DEFAULTS.herds, lone: c.lone ?? DEFAULTS.lone, sameAttract: c.same ?? true };
+  return { hier: c.hier, eps: c.eps, seed: c.seed, move: c.move ?? true, laws: c.laws ?? true, wander: c.wander ?? DEFAULTS.wander, dyn, org: c.org ?? DEFAULTS.org, herd: c.herd ?? DEFAULTS.herd, free: c.free ?? DEFAULTS.free, herds: c.herds ?? DEFAULTS.herds, lone: c.lone ?? DEFAULTS.lone, sameAttract: c.same ?? true, chance: c.chance ?? DEFAULTS.chance };
 }

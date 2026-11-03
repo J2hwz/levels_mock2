@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { simConfigOf } from '../src/config';
 import { replay } from '../src/replay';
 import { hashWorld } from '../src/sim/hash';
-import { COMPOSITION, DYNAMICS, type Dynamics, type Entity, P, PAIR_RULES, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, memberTargets, pairKey, naturalRadius, ringUnits, step } from '../src/sim/world';
+import { COMPOSITION, DYNAMICS, type Dynamics, type Entity, P, PAIR_RULES, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, lockOn, memberTargets, pairKey, chanceOf, RULE_CAT, RULE_LOCK, type ChanceMode, naturalRadius, ringUnits, step } from '../src/sim/world';
 import { scriptedActions, testConfig, testSession } from './helpers';
 
 function runScripted(query: string, ticks: number): string {
@@ -40,7 +40,7 @@ describe('determinism', () => {
 });
 
 describe('replay', () => {
-  it.each(['?seed=42', '?seed=42&move=0', '?seed=42&laws=0', '?seed=5&hier=0', '?seed=9&eps=0.3&size=irrelevant', '?seed=42&lock=all&catalysis=all&similar=all', '?seed=42&lock=0&catalysis=0', '?seed=5&hier=0&lock=0&catalysis=0&similar=0'])(
+  it.each(['?seed=42', '?seed=42&move=0', '?seed=42&laws=0', '?seed=5&hier=0', '?seed=9&eps=0.3&size=irrelevant', '?seed=42&lock=all&catalysis=all&similar=all', '?seed=42&lock=0&catalysis=0', '?seed=42&chance=uniform', '?seed=42&chance=none', '?seed=5&hier=0&lock=0&catalysis=0&similar=0'])(
     'replays a recorded log (%s) to the logged final hash',
     (q) => {
       const session = testSession(q);
@@ -369,8 +369,10 @@ function withSettings<T>(change: () => void, run: () => T): T {
   }
 }
 /** a small, still world: cheap to step, nothing drifts, so placed things stay where they are put */
-const smallWorld = (dyn: Partial<Dynamics>) =>
-  createWorld({ hier: true, eps: 0.05, seed: 42, move: false, free: 40, herds: 2, lone: 6, dyn: { lock: false, catalysis: false, similar: OFF, ...dyn } });
+const smallWorld = (dyn: Partial<Dynamics>, chance: ChanceMode = 'graded') =>
+  createWorld({ hier: true, eps: 0.05, seed: 42, move: false, free: 40, herds: 2, lone: 6, chance, dyn: { lock: false, catalysis: false, similar: OFF, ...dyn } });
+/** ticks until a roll made now has taken effect */
+const REVEAL = DYNAMICS.revealTicks + 1;
 /** two free things of `tier`, recoloured to types ta / tb, placed in an empty spot `gap` apart (edge to edge) */
 function meetPair(s: WorldState, tier: number, ta: number, tb: number, gap: number) {
   const free = s.entities.filter((e) => e.alive && e.tier === tier && e.parent < 0 && e.bond < 0);
@@ -389,7 +391,7 @@ function separate(s: WorldState, a: Entity, b: Entity) {
   place(s, b.id, a.x + naturalRadius(s, a) + naturalRadius(s, b) + 400, a.y);
   ticks(s, 1);
 }
-/** fraction of `n` fresh encounters at `tier` for which `fired` holds after one tick of contact */
+/** fraction of `n` fresh encounters at `tier` for which `fired` holds once the roll has taken effect */
 function successRate(s: WorldState, tier: number, ta: number, tb: number, n: number, fired: (a: Entity, b: Entity) => boolean) {
   const [a, b] = meetPair(s, tier, ta, tb, 400);
   ticks(s, 1);
@@ -397,7 +399,7 @@ function successRate(s: WorldState, tier: number, ta: number, tb: number, n: num
   for (let i = 0; i < n; i++) {
     place(s, b.id, a.x + naturalRadius(s, a) + naturalRadius(s, b) + 1, a.y);
     b.spin = 0;
-    ticks(s, 1);
+    ticks(s, REVEAL);
     if (fired(a, b)) hits++;
     separate(s, a, b);
   }
@@ -423,7 +425,7 @@ describe('lock & key (purple + green, every level, chance per encounter)', () =>
       () => {
         const s = dynWorld({ lock: true });
         const [a, b] = meetPair(s, 0, PURPLE, GREEN, 0);
-        ticks(s, 1);
+        ticks(s, REVEAL);
         expect(a.bond).toBe(b.id);
         expect(b.bond).toBe(a.id);
         ticks(s, 120);
@@ -461,7 +463,7 @@ describe('lock & key (purple + green, every level, chance per encounter)', () =>
         for (const tier of [1, 2]) {
           const s = smallWorld({ lock: true });
           const [a, b] = meetPair(s, tier, PURPLE, GREEN, 1);
-          ticks(s, 1);
+          ticks(s, REVEAL);
           expect(a.bond).toBe(b.id);
         }
         // a purple cell against a green organism: different levels, so nothing happens
@@ -486,21 +488,54 @@ describe('lock & key (purple + green, every level, chance per encounter)', () =>
     });
   });
 
-  it('a failed encounter is not retried while they stay touching, only after they separate', () =>
+  it('one roll per encounter: no new roll while they stay near or wiggle, a new one after they move apart', () =>
     withSettings(
       () => (DYNAMICS.lockChance = [1e-12, 0.4, 0.1]), // (exactly 0 would switch the level off: no roll at all)
       () => {
         const s = smallWorld({ lock: true });
         const [a, b] = meetPair(s, 0, PURPLE, GREEN, 0);
-        ticks(s, 1); // rolled at a ~0 chance: fails
+        ticks(s, REVEAL); // rolled at a ~0 chance: fails
+        const first = s.contacts.get(pairKey(a.id, b.id))!;
+        expect(first.rules).toBe(RULE_LOCK);
+        expect(first.ok).toBe(0);
         DYNAMICS.lockChance[0] = 1;
         ticks(s, 30);
         expect(a.bond).toBe(-1); // still the same encounter: no new roll
+        // wiggle out of range but not apart, and back
+        const touch = naturalRadius(s, a) + naturalRadius(s, b);
+        place(s, b.id, a.x + touch + DYNAMICS.apartMargin[0] - 2, a.y);
+        ticks(s, 2);
+        place(s, b.id, a.x + touch + 1, a.y);
+        ticks(s, REVEAL);
+        expect(a.bond).toBe(-1);
+        expect(s.contacts.get(pairKey(a.id, b.id))!.tick).toBe(first.tick);
+        // properly apart, then back: a new encounter rolls again
         place(s, b.id, a.x + 400, a.y);
         ticks(s, 1);
-        place(s, b.id, a.x + 2 * P.cellR, a.y);
-        ticks(s, 1);
-        expect(a.bond).toBe(b.id); // a new encounter rolls again
+        expect(s.contacts.has(pairKey(a.id, b.id))).toBe(false);
+        place(s, b.id, a.x + touch + 1, a.y);
+        ticks(s, REVEAL);
+        expect(a.bond).toBe(b.id);
+      },
+    ));
+
+  it('dragged into range, a roll happens during the drag; on success the partner snaps on and follows the drag', () =>
+    withSettings(
+      () => (DYNAMICS.lockChance = ALWAYS),
+      () => {
+        const s = smallWorld({ lock: true });
+        const [a, b] = meetPair(s, 0, PURPLE, GREEN, 300);
+        const near = b.x - (naturalRadius(s, a) + naturalRadius(s, b) + DYNAMICS.rangeMargin[0] - 2);
+        applyAction(s, { kind: 'dragStart', id: a.id, x: a.x, y: a.y });
+        applyAction(s, { kind: 'dragMove', id: a.id, x: near, y: b.y });
+        const evs = ticks(s, REVEAL);
+        expect(a.bond).toBe(b.id); // bound while still held
+        expect(Math.abs(Math.hypot(a.x - b.x, a.y - b.y) - 2 * P.cellR)).toBeLessThan(0.5); // snapped to touching
+        expect(evs.filter((e) => e.kind === 'encounter')).toEqual([{ kind: 'encounter', rule: 'lock', tier: 0, a: Math.min(a.id, b.id), b: Math.max(a.id, b.id), ok: true }]);
+        const bx = b.x;
+        applyAction(s, { kind: 'dragMove', id: a.id, x: a.x + 80, y: a.y });
+        expect(b.x - bx).toBeCloseTo(80, 6);
+        applyAction(s, { kind: 'dragEnd', id: a.id });
       },
     ));
 
@@ -580,6 +615,7 @@ describe('catalysis (light blue makes red spin, every level, chance per encounte
       () => {
         const s = smallWorld({ catalysis: true });
         const [cat, target] = meetPair(s, 1, LIGHT_BLUE, RED, 4);
+        ticks(s, REVEAL); // the line shows, then the spin starts
         const a0 = target.angle;
         ticks(s, 30);
         expect(target.spin).toBeCloseTo(DYNAMICS.catSpin[1], 6);
@@ -601,12 +637,12 @@ describe('catalysis (light blue makes red spin, every level, chance per encounte
         for (const tier of [0, 2]) {
           const s = smallWorld({ catalysis: true });
           const [, target] = meetPair(s, tier, LIGHT_BLUE, RED, 1);
-          ticks(s, 10);
+          ticks(s, REVEAL + 2);
           expect(target.spin).toBeCloseTo(DYNAMICS.catSpin[tier], 6);
         }
         const off = smallWorld({});
         const [, t] = meetPair(off, 1, LIGHT_BLUE, RED, 1);
-        ticks(off, 10);
+        ticks(off, REVEAL + 2);
         expect(t.spin).toBe(0);
         // a light blue cell against a red organism: different levels
         const s = smallWorld({ catalysis: true });
@@ -616,29 +652,34 @@ describe('catalysis (light blue makes red spin, every level, chance per encounte
         const [x, y] = emptySpot(s, 150);
         place(s, org.id, x, y);
         place(s, cell.id, x + naturalRadius(s, org) + P.cellR, y);
-        ticks(s, 10);
+        ticks(s, REVEAL + 2);
         expect(org.spin).toBe(0);
       },
     ));
 
-  it('does not roll while either is being dragged, however often the drag slides in and out of contact', () =>
+  it('a catalyst dragged into range rolls during the drag, and the target spins while it is still held', () =>
     withSettings(
-      () => (DYNAMICS.catChance = [1e-12, 1e-12, 1e-12]), // any roll made during the drag would fail
+      () => (DYNAMICS.catChance = ALWAYS),
       () => {
         for (const tier of [0, 1, 2]) {
           const s = smallWorld({ catalysis: true });
-          const [cat, target] = meetPair(s, tier, LIGHT_BLUE, RED, 300);
-          const touch = target.x - (naturalRadius(s, cat) + naturalRadius(s, target) + 1);
-          applyAction(s, { kind: 'dragStart', id: cat.id, x: touch - 300, y: target.y });
-          for (const off of [0, -100, 0, -100, 0, -100, 0]) {
-            applyAction(s, { kind: 'dragMove', id: cat.id, x: touch + off, y: target.y });
-            ticks(s, 3);
-          }
-          expect(s.contacts.get(pairKey(cat.id, target.id)) ?? 0).toBe(0); // nothing rolled yet
-          DYNAMICS.catChance[tier] = 1;
+          const [cat, target] = meetPair(s, tier, LIGHT_BLUE, RED, 400);
+          const touch = naturalRadius(s, cat) + naturalRadius(s, target);
+          applyAction(s, { kind: 'dragStart', id: cat.id, x: cat.x, y: cat.y });
+          applyAction(s, { kind: 'dragMove', id: cat.id, x: target.x - touch - DYNAMICS.rangeMargin[tier] + 2, y: target.y });
+          ticks(s, 1);
+          const enc = s.contacts.get(pairKey(cat.id, target.id))!;
+          expect(enc.rules).toBe(RULE_CAT);
+          expect(target.spin).toBe(0); // the line shows first
+          ticks(s, REVEAL);
+          expect(target.spin).toBeGreaterThan(0); // spinning while the catalyst is still held
+          // wiggling within the apart band never rolls again
+          applyAction(s, { kind: 'dragMove', id: cat.id, x: target.x - touch - DYNAMICS.apartMargin[tier] + 2, y: target.y });
+          ticks(s, 3);
+          applyAction(s, { kind: 'dragMove', id: cat.id, x: target.x - touch - 1, y: target.y });
+          ticks(s, 3);
+          expect(s.contacts.get(pairKey(cat.id, target.id))!.tick).toBe(enc.tick);
           applyAction(s, { kind: 'dragEnd', id: cat.id });
-          ticks(s, 2);
-          expect(target.spin).toBeGreaterThan(0); // the single roll happens on release
         }
       },
     ));
@@ -665,8 +706,49 @@ describe('catalysis (light blue makes red spin, every level, chance per encounte
         const [c, t] = pair.map((id) => s.entities[id]);
         expect([c.type, t.type]).toEqual([LIGHT_BLUE, RED]);
         ticks(s, 90);
-        expect(Math.hypot(c.x - t.x, c.y - t.y) - naturalRadius(s, c) - naturalRadius(s, t)).toBeLessThan(DYNAMICS.catMargin[1]);
+        expect(Math.hypot(c.x - t.x, c.y - t.y) - naturalRadius(s, c) - naturalRadius(s, t)).toBeLessThan(DYNAMICS.rangeMargin[1]);
         expect(t.spin).toBeCloseTo(DYNAMICS.catSpin[1], 6);
+      },
+    ));
+});
+
+describe('chance conditions (chance=graded|uniform|none)', () => {
+  it('uniform: every level gets the mean of its table', () => {
+    const c = { hier: true, eps: 0.05, seed: 1, chance: 'uniform' as ChanceMode };
+    for (const tier of [0, 1, 2]) {
+      expect(chanceOf(c, 'lock', tier)).toBeCloseTo((0.9 + 0.4 + 0.1) / 3, 12);
+      expect(chanceOf(c, 'catalysis', tier)).toBeCloseTo((0.4 + 0.9 + 0.1) / 3, 12);
+    }
+    const s = smallWorld({ lock: true }, 'uniform');
+    for (const tier of [0, 1, 2]) {
+      const rate = successRate(s, tier, PURPLE, GREEN, 300, (a, b) => a.bond === b.id);
+      expect(Math.abs(rate - 0.467)).toBeLessThan(0.08);
+    }
+  });
+
+  it('none: no rolls, no bonds, no spin, no pre-binding pull at any level', () => {
+    for (const tier of [0, 1, 2]) {
+      const s = smallWorld({ lock: true, catalysis: true }, 'none');
+      const [a, b] = meetPair(s, tier, PURPLE, GREEN, 1);
+      const [c, t] = meetPair(s, tier, LIGHT_BLUE, RED, 1);
+      ticks(s, REVEAL + 5);
+      expect(s.contacts.size).toBe(0);
+      expect(a.bond).toBe(-1);
+      expect(t.spin).toBe(0);
+      expect([b.bond, c.spin]).toEqual([-1, 0]);
+    }
+    expect(lockOn({ hier: true, eps: 0.05, seed: 1, chance: 'none', dyn: { lock: true, catalysis: true, similar: OFF } }, 0)).toBe(false);
+  });
+
+  it('every roll is logged once, as an encounter event with its result', () =>
+    withSettings(
+      () => (DYNAMICS.lockChance = [1e-12, 1, 1]),
+      () => {
+        const s = smallWorld({ lock: true });
+        meetPair(s, 0, PURPLE, GREEN, 1);
+        const evs = ticks(s, REVEAL + 20).filter((e) => e.kind === 'encounter');
+        expect(evs).toHaveLength(1);
+        expect(evs[0]).toMatchObject({ rule: 'lock', tier: 0, ok: false });
       },
     ));
 });

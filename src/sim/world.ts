@@ -34,7 +34,14 @@ export interface SimConfig {
   lone?: number;
   /** false = same-type cells never attract through the laws (positive diagonal of K0 set to 0). Missing = true. */
   sameAttract?: boolean;
+  /**
+   * How likely lock & key and catalysis are at each level: 'graded' = DYNAMICS.lockChance / catChance (default),
+   * 'uniform' = the mean of each table at every level, 'none' = never (composition is the only mechanism).
+   */
+  chance?: ChanceMode;
 }
+
+export type ChanceMode = 'graded' | 'uniform' | 'none';
 
 /**
  * Same-level dynamics. Lock & key and catalysis act at every level with a per-level chance per encounter
@@ -66,15 +73,22 @@ export const DYNAMICS = {
   lockPairs: [[1, 3]] as readonly (readonly [number, number])[],
   /** chance that an encounter of a lock pair binds them, per level */
   lockChance: [0.9, 0.4, 0.1],
-  /** catalysis: [catalyst, target]: the target spins while the catalyst touches it (light blue -> red) */
+  /** catalysis: [catalyst, target]: the target spins while the catalyst is near it (light blue -> red) */
   catalysis: [[0, 2]] as readonly (readonly [number, number])[],
-  /** chance that an encounter of catalyst and target makes the target spin (for that contact), per level */
+  /** chance that an encounter of catalyst and target makes the target spin (while they stay near), per level */
   catChance: [0.4, 0.9, 0.1],
   /** bond spring strength / damping, per level */
   bondK: [60, 30, 8],
   bondC: [6, 4, 2],
-  /** "touching" for lock & key: closer than rA + rB + bindMargin; separating beyond rA + rB + 2 * bindMargin allows a retry */
-  bindMargin: [4, 8, 20],
+  /**
+   * Interaction range: two things of the same level are "near" when the gap between their edges is below rangeMargin.
+   * Entering it rolls the dice once (also while one is being dragged). They must then move apart, gap above apartMargin,
+   * before they can roll again.
+   */
+  rangeMargin: [10, 20, 60],
+  apartMargin: [20, 40, 120],
+  /** after a roll, a line links the pair for this many ticks (0.4 s) before the result takes effect */
+  revealTicks: 12,
   /** a bound cell pushes every cell except its partner within this range ... */
   lockRepelR: 30,
   /** ... with this strength at contact, fading to 0 at the range, per level (cells only by default) */
@@ -83,8 +97,6 @@ export const DYNAMICS = {
   lockAttractR: [40, 90, 260],
   /** ... with this strength at contact, fading to 0 at the range, per level (stops once an encounter has been tried) */
   lockAttract: [50, 20, 8],
-  /** "touching" for catalysis: closer than rA + rB + catMargin (separating beyond rA + rB + 2 * catMargin allows a retry) */
-  catMargin: [6, 12, 30],
   /** catalysed spin, rad/s, per level */
   catSpin: [3.0, 3.0, 1.0],
   /** without contact the spin decays by this factor per tick ... */
@@ -266,19 +278,27 @@ export interface WorldState {
   isolated: number;
   drag: { id: number; x: number; y: number } | null;
   /**
-   * Encounters already rolled for: pair key (lower id * PAIR_KEY + higher id) -> CONTACT_* bits. An entry is
-   * cleared when the pair separates (or stops being siblings), which allows a new roll.
+   * Encounters already rolled for, by pair key (lower id * PAIR_KEY + higher id). An entry is cleared when the pair
+   * moves apart (or stops being siblings), which allows a new roll.
    */
-  contacts: Map<number, number>;
+  contacts: Map<number, Encounter>;
+}
+
+/** One roll per encounter of a pair. `rules`, `ok` and `done` are RULE_* bit sets. */
+export interface Encounter {
+  /** which rules were rolled for */
+  rules: number;
+  /** which rolls succeeded */
+  ok: number;
+  /** which results have taken effect (after the reveal) */
+  done: number;
+  /** tick of the roll */
+  tick: number;
 }
 
 export const PAIR_KEY = 1_000_000;
-/** lock & key roll made for this encounter */
-export const CONTACT_LOCK = 1;
-/** catalysis roll made for this encounter ... */
-export const CONTACT_CAT = 2;
-/** ... and it succeeded: the target spins while the contact lasts */
-export const CONTACT_CAT_OK = 4;
+export const RULE_LOCK = 1;
+export const RULE_CAT = 2;
 
 export type Action =
   | { kind: 'select'; id: number | null }
@@ -298,7 +318,9 @@ export type SimEvent =
   | { kind: 'herd_dissolved'; id: number; cause?: 'size'; organisms?: number[] }
   | { kind: 'region_depleted'; index: number }
   | { kind: 'swapped'; id: number; realisation: number; removed: number[]; added: number[] }
-  | { kind: 'founded'; id: number; tier: Tier; type: number; realisation: number; members: number[] };
+  | { kind: 'founded'; id: number; tier: Tier; type: number; realisation: number; members: number[] }
+  /** a roll's result took effect (after the reveal): ok = they bound / the target started spinning */
+  | { kind: 'encounter'; rule: 'lock' | 'catalysis'; tier: Tier; a: number; b: number; ok: boolean };
 
 // ---------------------------------------------------------------- parameters
 
@@ -477,7 +499,7 @@ export function pairKey(a: number, b: number): number {
  */
 function pairWithin(s: WorldState, o: Entity): void {
   if (o.tier === 0 || !lockOn(s.config, o.tier - 1)) return;
-  const chance = DYNAMICS.lockChance[o.tier - 1];
+  const chance = chanceOf(s.config, 'lock', o.tier - 1);
   for (const c of o.children) {
     const a = s.entities[c];
     if (a.bond >= 0) continue;
@@ -485,10 +507,11 @@ function pairWithin(s: WorldState, o: Entity): void {
       const b = s.entities[d];
       if (d === c || b.bond >= 0 || !isLockPair(a.type, b.type)) continue;
       const key = pairKey(c, d);
-      const seen = s.contacts.get(key) ?? 0;
-      if (seen & CONTACT_LOCK) continue;
-      s.contacts.set(key, seen | CONTACT_LOCK);
-      if (rand(s.rng) < chance) {
+      const seen = s.contacts.get(key);
+      if (seen && seen.rules & RULE_LOCK) continue;
+      const ok = rand(s.rng) < chance;
+      s.contacts.set(key, { rules: RULE_LOCK, ok: ok ? RULE_LOCK : 0, done: RULE_LOCK, tick: s.tick });
+      if (ok) {
         a.bond = d;
         b.bond = c;
         break;
@@ -544,14 +567,26 @@ export function band(c: SimConfig, tier: Tier): readonly [number, number] {
   return tier === 1 ? (c.org ?? DEFAULT_ORG) : (c.herd ?? DEFAULT_HERD);
 }
 
+/**
+ * The chance that an encounter fires this rule at this level, under the `chance` condition: 'graded' = the table,
+ * 'uniform' = the mean of the table at every level, 'none' = 0.
+ */
+export function chanceOf(c: SimConfig, rule: 'lock' | 'catalysis', tier: number): number {
+  const table = rule === 'lock' ? DYNAMICS.lockChance : DYNAMICS.catChance;
+  const mode = c.chance ?? 'graded';
+  if (mode === 'none') return 0;
+  if (mode === 'uniform') return table.reduce((sum, p) => sum + p, 0) / table.length;
+  return table[tier] ?? 0;
+}
+
 /** Lock & key is switched on and has a chance above 0 at this level. */
 export function lockOn(c: SimConfig, tier: number): boolean {
-  return c.dyn?.lock === true && (DYNAMICS.lockChance[tier] ?? 0) > 0;
+  return c.dyn?.lock === true && chanceOf(c, 'lock', tier) > 0;
 }
 
 /** Catalysis is switched on and has a chance above 0 at this level. */
 export function catalysisOn(c: SimConfig, tier: number): boolean {
-  return c.dyn?.catalysis === true && (DYNAMICS.catChance[tier] ?? 0) > 0;
+  return c.dyn?.catalysis === true && chanceOf(c, 'catalysis', tier) > 0;
 }
 
 function similarOn(c: SimConfig, tier: number): boolean {
@@ -1154,8 +1189,8 @@ function advance(s: WorldState, events: SimEvent[]): void {
     if (ents[s.drag.id].bond >= 0) held[ents[s.drag.id].bond] = 1;
   }
 
-  // 0a. forget encounters that are over (the pair separated, or stopped being siblings), so they can be rolled again
-  for (const [key, bits] of s.contacts) {
+  // 0a. forget encounters that are over (the pair moved apart, or stopped being siblings), so they can roll again
+  for (const [key] of s.contacts) {
     const a = ents[Math.floor(key / PAIR_KEY)];
     const b = ents[key % PAIR_KEY];
     if (!a || !b || !a.alive || !b.alive) {
@@ -1163,42 +1198,82 @@ function advance(s: WorldState, events: SimEvent[]): void {
       continue;
     }
     if (a.parent >= 0 && a.parent === b.parent) continue; // siblings: one roll for as long as they share a parent
-    const gap = dhypot(b.x - a.x, b.y - a.y) - naturalRadius(s, a) - naturalRadius(s, b);
-    let left = bits;
-    if (left & CONTACT_LOCK && gap > 2 * DYNAMICS.bindMargin[a.tier]) left &= ~CONTACT_LOCK;
-    if (left & CONTACT_CAT && gap > 2 * DYNAMICS.catMargin[a.tier]) left &= ~(CONTACT_CAT | CONTACT_CAT_OK);
-    if (left) s.contacts.set(key, left);
-    else s.contacts.delete(key);
+    if (dhypot(b.x - a.x, b.y - a.y) - naturalRadius(s, a) - naturalRadius(s, b) > DYNAMICS.apartMargin[a.tier]) s.contacts.delete(key);
   }
 
-  // 0b. lock & key, every level. Inside a whole, unbound lock-pair members pair up (one roll per sibling pair); two
-  // free, unbound ones that start touching get one roll (ascending id order). Never across levels, never across
-  // wholes, never a free thing with a member.
+  // 0b. lock & key inside wholes: unbound lock-pair members pair up (one roll per sibling pair, takes effect at once)
+  for (let t = 0; t < 2; t++) if (lockOn(s.config, t)) for (const p of byTier[t + 1]) pairWithin(s, p);
+
+  // 0c. encounters, every level, same level only. Two things that come within range (gap < rangeMargin), also while
+  // one is dragged, roll once for each rule that applies to them: lock & key if both are free and unbound lock-pair
+  // types, catalysis if one is the other's catalyst. Ascending id order, so replays roll identically.
+  const gapOf = (a: Entity, b: Entity) => dhypot(b.x - a.x, b.y - a.y) - rad[a.id] - rad[b.id];
   for (let t = 0; t < 3; t++) {
-    if (!lockOn(s.config, t)) continue;
-    if (t < 2) for (const p of byTier[t + 1]) pairWithin(s, p);
+    const lockHere = lockOn(s.config, t);
+    const catHere = catalysisOn(s.config, t);
+    if (!lockHere && !catHere) continue;
     const list = byTier[t];
     for (let i = 0; i < list.length; i++) {
       const a = list[i];
-      if (a.parent >= 0 || a.bond >= 0 || held[a.id]) continue;
       for (let j = i + 1; j < list.length; j++) {
         const b = list[j];
-        if (b.parent >= 0 || b.bond >= 0 || held[b.id] || !isLockPair(a.type, b.type)) continue;
-        if (dhypot(b.x - a.x, b.y - a.y) >= rad[a.id] + rad[b.id] + DYNAMICS.bindMargin[t]) continue;
+        const lockPair = lockHere && a.parent < 0 && b.parent < 0 && a.bond < 0 && b.bond < 0 && isLockPair(a.type, b.type);
+        const catPair = catHere && (catalyses(a.type, b.type) || catalyses(b.type, a.type));
+        if (!lockPair && !catPair) continue;
         const key = pairKey(a.id, b.id);
-        const seen = s.contacts.get(key) ?? 0;
-        if (seen & CONTACT_LOCK) continue; // already rolled for this encounter
-        s.contacts.set(key, seen | CONTACT_LOCK);
-        if (rand(s.rng) < DYNAMICS.lockChance[t]) {
-          a.bond = b.id;
-          b.bond = a.id;
-          break;
+        if (s.contacts.has(key) || gapOf(a, b) >= DYNAMICS.rangeMargin[t]) continue;
+        const enc: Encounter = { rules: 0, ok: 0, done: 0, tick: s.tick };
+        if (lockPair) {
+          enc.rules |= RULE_LOCK;
+          if (rand(s.rng) < chanceOf(s.config, 'lock', t)) enc.ok |= RULE_LOCK;
         }
+        if (catPair) {
+          enc.rules |= RULE_CAT;
+          if (rand(s.rng) < chanceOf(s.config, 'catalysis', t)) enc.ok |= RULE_CAT;
+        }
+        s.contacts.set(key, enc);
       }
     }
   }
-  // things a catalyst is spinning this tick (a successful encounter that is still in contact)
+
+  // 0d. after the reveal, results take effect. Lock & key: if they are still near, free and unbound, they bind and
+  // the partner snaps to touching (a dragged one's partner then follows the drag). Catalysis: the target spins for as
+  // long as the pair stays near. A failed roll, or one whose pair left range in time, does nothing.
   const catTouched = new Uint8Array(n);
+  for (const [key, enc] of s.contacts) {
+    const a = ents[Math.floor(key / PAIR_KEY)];
+    const b = ents[key % PAIR_KEY];
+    if (!on(a) || !on(b)) continue;
+    const t = a.tier;
+    const near = gapOf(a, b) < DYNAMICS.rangeMargin[t];
+    const due = s.tick - enc.tick >= DYNAMICS.revealTicks;
+    if (due && enc.rules & RULE_LOCK && !(enc.done & RULE_LOCK)) {
+      enc.done |= RULE_LOCK;
+      const bound = (enc.ok & RULE_LOCK) !== 0 && near && a.parent < 0 && b.parent < 0 && a.bond < 0 && b.bond < 0;
+      if (bound) {
+        a.bond = b.id;
+        b.bond = a.id;
+        // snap together: move the one not held by the pointer so they touch
+        const [still, mover] = held[b.id] && !held[a.id] ? [b, a] : [a, b];
+        const dx = mover.x - still.x;
+        const dy = mover.y - still.y;
+        const d = dhypot(dx, dy) || 1e-6;
+        const want = rad[a.id] + rad[b.id];
+        translateTree(s, mover.id, (dx / d) * want - dx, (dy / d) * want - dy);
+        mover.vx = still.vx;
+        mover.vy = still.vy;
+      }
+      events.push({ kind: 'encounter', rule: 'lock', tier: t as Tier, a: a.id, b: b.id, ok: bound });
+    }
+    if (due && enc.rules & RULE_CAT && !(enc.done & RULE_CAT)) {
+      enc.done |= RULE_CAT;
+      events.push({ kind: 'encounter', rule: 'catalysis', tier: t as Tier, a: a.id, b: b.id, ok: (enc.ok & RULE_CAT) !== 0 && near });
+    }
+    if (enc.done & RULE_CAT && enc.ok & RULE_CAT && near) {
+      if (catalyses(a.type, b.type)) catTouched[b.id] = 1;
+      if (catalyses(b.type, a.type)) catTouched[a.id] = 1;
+    }
+  }
 
   // 1. same-tier interactions (+ crowding for cells)
   for (let t = 0; t < 3; t++) {
@@ -1239,31 +1314,13 @@ function advance(s: WorldState, events: SimEvent[]): void {
             fb += sim;
           }
         }
-        const ab = catalyses(a.type, b.type);
-        const ba = catalyses(b.type, a.type);
-        if ((ab || ba) && catalysisOn(s.config, t) && d < rad[a.id] + rad[b.id] + DYNAMICS.catMargin[t]) {
-          // catalysis: one roll per encounter; if it succeeded, the target spins for as long as they touch.
-          // No roll while either is held by the pointer (as for lock & key): sliding a dragged thing in and out of
-          // contact would otherwise roll again and again. The roll happens once it is let go, if they still touch.
-          const key = pairKey(a.id, b.id);
-          let seen = s.contacts.get(key) ?? 0;
-          if (!(seen & CONTACT_CAT) && !held[a.id] && !held[b.id]) {
-            seen |= CONTACT_CAT;
-            if (rand(s.rng) < DYNAMICS.catChance[t]) seen |= CONTACT_CAT_OK;
-            s.contacts.set(key, seen);
-          }
-          if (seen & CONTACT_CAT_OK) {
-            if (ab) catTouched[b.id] = 1;
-            if (ba) catTouched[a.id] = 1;
-          }
-        }
         const lock = lockOn(s.config, t);
         if (
           lock && drift && d < DYNAMICS.lockAttractR[t] && a.parent < 0 && b.parent < 0 && a.bond < 0 && b.bond < 0 &&
-          isLockPair(a.type, b.type) && !((s.contacts.get(pairKey(a.id, b.id)) ?? 0) & CONTACT_LOCK)
+          isLockPair(a.type, b.type) && !s.contacts.has(pairKey(a.id, b.id))
         ) {
-          // two loose, unbound lock-pair things near each other pull gently together, so they meet and roll.
-          // Once this encounter has been rolled (and failed), the pull stops until they have separated.
+          // two loose, unbound lock-pair things near each other pull gently together, so they come within range and roll.
+          // Once this encounter has been rolled (and failed), the pull stops until they have moved apart.
           const k = DYNAMICS.lockAttract[t] * (1 - d / DYNAMICS.lockAttractR[t]);
           fa += k;
           fb += k;
@@ -1535,6 +1592,6 @@ export function snapshotWorld(s: WorldState): unknown {
     drag: s.drag,
     regions: s.regions,
     entities: s.entities.filter((e) => e.alive),
-    contacts: [...s.contacts].sort((a, b) => a[0] - b[0]),
+    contacts: [...s.contacts].sort((a, b) => a[0] - b[0]).map(([key, e]) => ({ key, ...e })),
   }));
 }

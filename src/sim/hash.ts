@@ -56,9 +56,12 @@ export function hashWorld(s: WorldState): string {
     if (s.config.laws === false) h.num(e.heading);
   }
   // encounters already rolled for decide future rolls, so they are part of the state
-  for (const [k, v] of [...s.contacts].sort((x, y) => x[0] - y[0])) {
+  for (const [k, e] of [...s.contacts].sort((x, y) => x[0] - y[0])) {
     h.num(k);
-    h.num(v);
+    h.num(e.rules);
+    h.num(e.ok);
+    h.num(e.done);
+    h.num(e.tick);
   }
   for (const r of s.regions) {
     h.num(r.health);

@@ -2,7 +2,7 @@
 
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import type { SizeMode } from '../config';
-import { type Entity, P, type WorldState, catalysisOn, descendants } from '../sim/world';
+import { type Entity, P, type WorldState, catalysisOn, descendants, DYNAMICS, PAIR_KEY, RULE_CAT, RULE_LOCK } from '../sim/world';
 import { Camera } from './camera';
 import { type Layout, openRoots } from './layout';
 import { type Glyph, type SkinDef, lerpColor } from './skins';
@@ -164,7 +164,67 @@ export class Renderer {
       if (n) this.gOver.circle(n.x, n.y, n.r + 5 * px).stroke({ width: 3 * px, color: sk.stress, alpha: 0.9 });
     }
 
+    this.drawEncounters(s, layout, sk, px, hidden);
     this.drawLabels(s, layout, v, px);
+  }
+
+  /**
+   * Encounters: when two things come within range, a line links them while the dice roll is revealed. Then it stays
+   * (lock & key: they are now bound), fades (catalysis: the target starts spinning), or breaks (the roll failed).
+   */
+  private drawEncounters(s: WorldState, layout: Layout, sk: SkinDef, px: number, hidden: (e: Entity) => boolean): void {
+    const R = DYNAMICS.revealTicks;
+    const AFTER = 15; // ticks the result stays visible (0.5 s)
+    const colourOf = (e: Entity) => (e.tier === 0 ? sk.cell : e.tier === 1 ? sk.species : sk.herd)[e.type];
+    for (const [key, enc] of s.contacts) {
+      const ea = s.entities[Math.floor(key / PAIR_KEY)];
+      const eb = s.entities[key % PAIR_KEY];
+      if (!ea?.alive || !eb?.alive || hidden(ea) || hidden(eb)) continue;
+      if (ea.parent >= 0 && ea.parent === eb.parent) continue; // pairing inside a whole is not an encounter
+      const age = s.tick - enc.tick;
+      if (age > R + AFTER) continue;
+      const na = layout[ea.id];
+      const nb = layout[eb.id];
+      if (!na || !nb) continue;
+      const dx = nb.x - na.x;
+      const dy = nb.y - na.y;
+      const d = Math.hypot(dx, dy) || 1e-6;
+      const ux = dx / d;
+      const uy = dy / d;
+      // centre to centre, drawn on top, so it is visible even when the two are nearly touching
+      const span = [0, d];
+      const at = (f: number): [number, number] => [na.x + ux * f, na.y + uy * f];
+      const mid = (span[0] + span[1]) / 2;
+      const half = (span[1] - span[0]) / 2;
+      const width = Math.max(3 * px, Math.min(na.r, nb.r) * 0.3);
+      // catalysis lines take the catalyst's colour; lock & key lines are white
+      const catalyst = DYNAMICS.catalysis.some(([c, t]) => c === ea.type && t === eb.type) ? ea : eb;
+      const color = enc.rules & RULE_CAT ? colourOf(catalyst) : sk.ui;
+      const seg = (f0: number, f1: number, alpha: number, w = width) => {
+        const [x0, y0] = at(f0);
+        const [x1, y1] = at(f1);
+        this.gOver.moveTo(x0, y0).lineTo(x1, y1).stroke({ width: w, color, alpha });
+      };
+      if (age < R) {
+        // the roll: the line grows out from the middle, then pulses until the result
+        const grow = Math.min(1, (age + 1) / 4);
+        seg(mid - half * grow, mid + half * grow, 0.65 + 0.35 * Math.sin(age * 1.6));
+        continue;
+      }
+      const k = (age - R) / AFTER; // 0 -> 1 over the result
+      const bound = (enc.ok & enc.done & RULE_LOCK) !== 0 && ea.bond === eb.id;
+      const spun = (enc.ok & enc.done & RULE_CAT) !== 0;
+      if (bound) {
+        seg(span[0], span[1], 1 - k, width * 1.6); // snaps tight; the bond line stays underneath
+      } else if (spun) {
+        seg(span[0], span[1], 0.9 * (1 - k)); // fades while the target turns
+      } else {
+        // broken: the two halves pull back toward their own ends and fade
+        const keep = half * (1 - k) * 0.8;
+        seg(span[0], span[0] + keep, 0.9 * (1 - k));
+        seg(span[1] - keep, span[1], 0.9 * (1 - k));
+      }
+    }
   }
 
   private healthBar(g: Graphics, cx: number, y: number, w: number, health: number, sk: SkinDef, a = 1): void {
