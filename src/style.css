@@ -269,3 +269,34 @@
   padding: 4px 6px;
   border-radius: 4px;
 }
+
+/* participant notepad: bottom right of the world, shown / hidden like the controls legend */
+.notepad {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  font-size: 12px;
+}
+.notepad.open {
+  width: 300px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--panel-2);
+  border-radius: 6px;
+  padding: 6px 10px 8px;
+}
+.notepad .row {
+  display: flex;
+  align-items: center;
+}
+.notepad .grow {
+  flex: 1;
+}
+.notepad textarea {
+  min-height: 150px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.notepad .notepad-hide {
+  font-size: 11px;
+  color: var(--muted);
+}

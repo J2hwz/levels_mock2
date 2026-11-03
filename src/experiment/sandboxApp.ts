@@ -12,6 +12,7 @@ import { type Action, P } from '../sim/world';
 import { ControlsLegend, InspectPanel, type InspectInfo, PhaseBanner, TimeControls } from '../ui/controls';
 import { h } from '../ui/dom';
 import { NotebookPanel } from '../ui/notebook';
+import { Notepad } from '../ui/notepad';
 import { RulesPanel } from '../ui/rules';
 import { saveBackup } from './storage';
 
@@ -58,7 +59,12 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   const banner = new PhaseBanner(timeControls.el, cfg.debug);
   const shell = h('div', { class: `sandbox skin-${cfg.skin}` }, banner.el, h('div', { class: 'main' }, stage, side));
   const legend = new ControlsLegend(cfg.debug, cfg.reveal, cfg.lock, (open) => session.log('legend', { open }));
-  stage.append(inspect.el, legend.el);
+  // participant notes, available in every phase (starts closed; bottom right of the world)
+  const notepad = new Notepad(
+    (open) => session.log('notepad_toggle', { open }),
+    (text, reason) => session.log('notepad', { text, reason }),
+  );
+  stage.append(inspect.el, legend.el, notepad.el);
   if (cfg.debug) stage.append(hud);
   root.append(shell);
 
@@ -217,8 +223,10 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     renderer.app.ticker.remove(frame);
     window.clearInterval(camTimer);
     window.clearInterval(backupTimer);
+    notepad.flush('end');
+    notepad.dispose();
     session.log('phase', { from: PHASES[phase].key, to: 'end', index: 3 });
-    session.log('final_state', { notebook: notebook.groups, rules: rules.cards, notes: rules.notes });
+    session.log('final_state', { notebook: notebook.groups, rules: rules.cards, notes: notepad.text });
     const hash = session.end();
     const saved = saveBackup(session);
     input.dispose();

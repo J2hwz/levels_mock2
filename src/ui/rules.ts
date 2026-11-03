@@ -1,4 +1,4 @@
-// Phase 3 rule cards: "This rule is about <group>", "When…", "Then…", plus free notes.
+// Phase 3 rule cards: "This rule is about <group>", "When…", "Then…". (Free notes live in the notepad.)
 // Not scored in this mockup; every edit is reported as a diff.
 
 import { h } from './dom';
@@ -16,13 +16,11 @@ export type RuleDiff =
   | { op: 'delete'; id: string; card: RuleCard }
   | { op: 'set_about'; id: string; from: string | null; to: string | null }
   | { op: 'set_when'; id: string; from: string; to: string }
-  | { op: 'set_then'; id: string; from: string; to: string }
-  | { op: 'notes'; from: string; to: string };
+  | { op: 'set_then'; id: string; from: string; to: string };
 
 export class RulesPanel {
   readonly el = h('section', { class: 'panel rules' });
   cards: RuleCard[] = [];
-  notes = '';
   private nextId = 1;
 
   constructor(
@@ -72,14 +70,6 @@ export class RulesPanel {
       );
     });
 
-    const notes = h('textarea', { rows: 4, placeholder: 'Anything else you noticed…', id: 'rules-notes' });
-    notes.value = this.notes;
-    notes.addEventListener('change', () => {
-      const from = this.notes;
-      this.notes = notes.value;
-      this.emit({ op: 'notes', from, to: notes.value });
-    });
-
     this.el.replaceChildren(
       h('h3', {}, 'Rules'),
       h('p', { class: 'muted' }, 'Write rules about how things in this world behave.'),
@@ -92,8 +82,6 @@ export class RulesPanel {
           this.emit({ op: 'create', id }, true);
         },
       }, '+ Add rule'),
-      h('h4', {}, 'Notes'),
-      notes,
     );
   }
 }

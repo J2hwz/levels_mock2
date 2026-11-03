@@ -386,6 +386,15 @@ for (const hier of [1, 0]) {
   await page.locator('[data-speed="0.5"]').click();
   await page.screenshot({ path: `${OUT}/runthrough_1_explore.png` });
 
+  // notepad: open it, type (the letters i and c must not isolate or combine), pause so it is logged, hide it
+  await page.locator('#notepad-open').click();
+  await page.locator('#notepad-text').pressSequentially('pink blobs circle each other; cells inside a blob stick together');
+  const isoAfterTyping = await page.evaluate(() => window.__sandbox.state.isolated);
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: `${OUT}/runthrough_1c_notepad.png` });
+  await page.locator('#notepad-hide').click();
+  console.log('notepad typed (isolated after typing i/c:', isoAfterTyping, ')');
+
   // phase 2: organise
   await page.locator('#phase-skip').click();
   await page.locator('[data-speed="0"]').click();
@@ -420,8 +429,9 @@ for (const hier of [1, 0]) {
   await page.locator('[data-card="r1"] select').selectOption('g2');
   await page.locator('[data-card="r1"] textarea').nth(0).fill('two blobs get too close');
   await page.locator('[data-card="r1"] textarea').nth(1).fill('their dots turn red and shake');
-  await page.locator('#rules-notes').fill('the hazes drift in circles');
-  await page.locator('#rules-notes').blur();
+  await page.locator('#notepad-open').click();
+  await page.locator('#notepad-text').press('End');
+  await page.locator('#notepad-text').pressSequentially('\nthe hazes drift in circles');
   await page.locator('[data-speed="1"]').click();
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${OUT}/runthrough_3_theorise.png` });
@@ -432,6 +442,13 @@ for (const hier of [1, 0]) {
   const path = 'tests/fixtures/browser-session.json';
   await dl.saveAs(path);
   console.log('downloaded', dl.suggestedFilename(), '->', path);
+  {
+    const { readFileSync } = await import('node:fs');
+    const log = JSON.parse(readFileSync(path, 'utf8'));
+    const notes = log.events.filter((e) => e.type === 'notepad' || e.type === 'notepad_toggle').map((e) => `${e.type}:${e.payload.reason ?? e.payload.open}`);
+    const final = log.events.find((e) => e.type === 'final_state');
+    console.log('notepad events:', notes.join(' '), '| final notes:', JSON.stringify(final.payload.notes));
+  }
   const backup = await page.evaluate(() => {
     const k = localStorage.getItem('levels-sandbox-last');
     return k ? (localStorage.getItem(k)?.length ?? 0) : 0;

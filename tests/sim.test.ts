@@ -72,6 +72,12 @@ describe('replay', () => {
     const res = replay(log);
     expect(res.mismatches).toEqual([]);
     expect(res.actualHash).toBe(res.expectedHash);
+    // the participant notepad: opened / hidden, text reported, and the last reported text is the final notes
+    const types = new Set(log.events.map((e: { type: string }) => e.type));
+    expect([...types]).toEqual(expect.arrayContaining(['notepad', 'notepad_toggle']));
+    const notes = log.events.filter((e: { type: string }) => e.type === 'notepad');
+    const final = log.events.find((e: { type: string }) => e.type === 'final_state');
+    expect(final.payload.notes).toBe(notes[notes.length - 1].payload.text);
   });
 
   it('detects a tampered log', () => {

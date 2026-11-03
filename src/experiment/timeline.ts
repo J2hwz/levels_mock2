@@ -45,6 +45,7 @@ export function run(cfg: Config): JsPsych {
           <li><b>Esc</b> clears the selection.</li>
           <li><b>Scroll</b> to zoom. <b>Drag the background</b> to move around.</li>
           <li>Use the time buttons at the top to pause, slow down or speed up.</li>
+          <li>Use the <b>notepad</b> (bottom right) to write down anything you notice. You can show or hide it at any time.</li>
         </ul></div>`,
       `<div class="prose"><h2>Doing things</h2>
         <ul>

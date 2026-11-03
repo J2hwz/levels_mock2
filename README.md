@@ -187,6 +187,12 @@ A **controls legend** (top right of the world) lists all of these throughout the
 don't have to remember them. The `I` row highlights while isolation is on. It can be collapsed with "hide";
 each toggle is logged as a `legend` event `{open}`.
 
+A **notepad** (bottom right of the world) lets participants write notes at any time, in every phase; the same text
+carries through Explore, Organise and Theorise. It starts closed as a small "✎ notepad" button and is hidden again with
+"hide". Typing in it never triggers sandbox keys (I, C, S, Esc). The text is logged as a `notepad` event when typing
+pauses for 2 s, when it is hidden, and at the end (only if it changed); each show/hide is a `notepad_toggle` event. The
+instruction page mentions it. Code: `src/ui/notepad.ts`.
+
 The inspect panel (bottom left) shows only observable properties: colour, size, speed, number of visible parts.
 Tier names appear only with `debug=1`.
 
@@ -194,7 +200,7 @@ Tier names appear only with `debug=1`.
 
 1. **Explore**: timed (6 min, or 60 s with `short=1`). The instructions never mention levels.
 2. **Organise**: the notebook panel appears: create named groups, add the selected entity as an example, nest groups with the "part of" dropdown. Continue button.
-3. **Theorise**: rule cards ("This rule is about [group]", "When…", "Then…") plus a free-text notes box. Not scored. Finish button.
+3. **Theorise**: rule cards ("This rule is about [group]", "When…", "Then…"). Free notes are written in the notepad, available throughout. Not scored. Finish button.
 
 The world keeps running in phases 2 and 3. jsPsych timeline: welcome → 3 instruction pages → sandbox → end screen with a download button.
 
@@ -210,7 +216,7 @@ src/
     hash.ts        64-bit FNV-style hash of the exact float64 state
   render/          Pixi renderer, camera, skins, pure layout/hit-testing, pointer→Action input
   log/             logger (event stream) + Session (world + log; used by the app and by tests)
-  ui/              notebook, rule cards, inspect panel, time controls, phase banner
+  ui/              notebook, rule cards, notepad, inspect panel, time controls, phase banner
   experiment/      jsPsych timeline, SandboxPlugin, sandbox app loop, download/backup
   replay.ts        replay a log through sim/ and check every logged hash
 scripts/           screenshots.mjs (Playwright), replay.mjs (CLI)
@@ -269,8 +275,10 @@ Download: `levels-sandbox-<seed>-<ISO timestamp>.json`. A copy is kept in `local
 | `region_depleted`, `swapped` | sim events |
 | `phase` | `{from, to, index}` |
 | `notebook` | diff: `create`, `rename{from,to}`, `delete{reparented}`, `add_example{entity}`, `remove_example`, `set_parent{from,to}` |
-| `rule` | diff: `create`, `delete{card}`, `set_about`, `set_when`, `set_then` (each `{from,to}`), `notes{from,to}` |
-| `final_state` | `{notebook, rules, notes}` |
+| `rule` | diff: `create`, `delete{card}`, `set_about`, `set_when`, `set_then` (each `{from,to}`) |
+| `notepad` | `{text, reason: "pause"\|"hide"\|"end"}`: the full notepad text, when typing paused for 2 s, when it was hidden, or at the end (only if it changed since the last report) |
+| `notepad_toggle` | `{open}` when the notepad is shown/hidden |
+| `final_state` | `{notebook, rules, notes}` (`notes` = the notepad text) |
 | `session_end` | `{tick, hash}`, the hash the replay must reproduce |
 | `legend` | `{open}` when the controls legend is hidden/shown |
 | `download` | `{file}` |
@@ -395,8 +403,8 @@ free-standing ancestor's outline. Same-level collision is unchanged.
 - Selection: the first click selects the deepest hit (lowest tier, nearest centre). Clicking the same spot again climbs to the parent; past the top it wraps back to the deepest. Clicking empty space clears the selection.
 - A click becomes a drag after 4 px of movement. Dragging starts only if the pointer went down on the selection or one of its parts; otherwise the drag pans.
 - Inspect panel "size" is the on-screen radius in world units; "speed" is world units per second.
+- Text edits (group names, When/Then) are logged on `change` (blur / Enter), not per keystroke. The notepad is logged when typing pauses for 2 s, when it is hidden, and at the end.
 - Notebook: free-text group names, examples shown as `#id` chips with a colour swatch (clicking one selects it and centres the camera). Deleting a group moves its children up to the deleted group's parent. The "part of" dropdown excludes the group itself and its descendants (no cycles).
-- Text edits (group names, When/Then, notes) are logged on `change` (blur / Enter), not per keystroke.
 - Organise and Theorise are untimed (Continue / Finish buttons). Explore uses wall-clock time and keeps counting while paused.
 - Hash every 1 s and snapshots every 10 s are in **sim time** (ticks), so pausing does not create redundant snapshots.
 - The session (world + log) is created when the instructions finish, so `t_ms = 0` is the start of the sandbox.
