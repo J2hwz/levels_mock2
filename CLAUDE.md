@@ -12,12 +12,17 @@ group what they saw and write rules about it. The study asks whether, and how, p
 - with their own laws;
 - with causes acting within and across levels.
 
-Phases, inside one jsPsych trial:
+Phases (Explore + Report in one jsPsych trial, then one trial per generalisation task):
 1. **Explore:** 6 min, or 60 s with `short=1`. The instructions never mention levels.
 2. **Report:** three steps in a fixed order, with no going back. An open description; fill-in-the-blank rules built from
    picture tokens (no level names, the word used is "scale"), after a worked example; then an open "how would you
    organise it" question. The text is in `REPORT` in `src/ui/report.ts`. A notepad is available throughout. Avoid priming:
    never name levels or reveal mechanisms in participant-facing text.
+3. **Generalisation:** two 1-minute tasks in a fresh empty world (same seed). Participants drop elements in from a picture
+   palette and try to make an effect happen: "make two things stick together" (success = cell lock & key) and "make
+   something start spinning" (success = organism catalysis). Settings and text are in `GEN` in
+   `src/experiment/generalisation.ts`. Each task is its own `Session`. The data file is the main log plus
+   `generalisation: [taskLog, taskLog]`, and every log replays on its own.
 
 Everything participants do is logged, and the world is **deterministic**, so any session can be replayed exactly.
 
@@ -61,8 +66,8 @@ src/
     hash.ts        state hash used to verify replays
   render/          Pixi renderer, skins (colours/shapes), camera, pure layout + hit testing, pointer -> Action
   log/             Logger (event stream) and Session (world + log; used by app and tests)
-  ui/              report phase, notepad, inspect panel, controls legend, time controls
-  experiment/      jsPsych timeline, SandboxPlugin, the app loop, download/backup
+  ui/              report phase, picture tokens (tokens.ts), notepad, inspect panel, controls legend, time controls
+  experiment/      jsPsych timeline, SandboxPlugin, the app loop (main + task mode), generalisation.ts (GEN), download/backup
   replay.ts        replays a log through sim/ and checks every logged hash
 scripts/           screenshots.mjs (Playwright run-through; re-records the replay fixture), replay.mjs (CLI)
 tests/             vitest: sim.test.ts (behaviour, determinism, replay), layout.test.ts, architecture.test.ts

@@ -12,14 +12,20 @@ if (!file) {
 const server = await createServer({ server: { middlewareMode: true }, appType: 'custom', logLevel: 'error' });
 try {
   const { replay } = await server.ssrLoadModule('/src/replay.ts');
-  const log = JSON.parse(readFileSync(file, 'utf8'));
-  const res = replay(log);
-  console.log(`seed ${log.header.seed}  config ${JSON.stringify(log.header.config)}`);
-  console.log(`ticks ${res.finalTick}  hash checks ${res.checkedHashes}  mismatches ${res.mismatches.length}`);
-  console.log(`final hash  logged ${res.expectedHash}  replayed ${res.actualHash}`);
-  if (res.mismatches.length) console.log('first mismatch:', res.mismatches[0]);
-  console.log(res.ok ? 'OK: replay reproduces the logged state' : 'FAIL: replay diverged');
-  process.exitCode = res.ok ? 0 : 1;
+  const file_ = JSON.parse(readFileSync(file, 'utf8'));
+  // the main session, then each generalisation task (each its own world and log)
+  const logs = [['main session', file_], ...(file_.generalisation ?? []).map((g) => [`task ${g.header.config.task}`, g])];
+  let allOk = true;
+  for (const [name, log] of logs) {
+    const res = replay(log);
+    allOk &&= res.ok;
+    console.log(`-- ${name}: seed ${log.header.seed}`);
+    console.log(`ticks ${res.finalTick}  hash checks ${res.checkedHashes}  mismatches ${res.mismatches.length}`);
+    console.log(`final hash  logged ${res.expectedHash}  replayed ${res.actualHash}`);
+    if (res.mismatches.length) console.log('first mismatch:', res.mismatches[0]);
+  }
+  console.log(allOk ? `OK: replay reproduces the logged state (${logs.length} log${logs.length === 1 ? '' : 's'})` : 'FAIL: replay diverged');
+  process.exitCode = allOk ? 0 : 1;
 } finally {
   await server.close();
 }

@@ -433,6 +433,32 @@ for (const hier of [1, 0]) {
   await page.screenshot({ path: `${OUT}/runthrough_4_report_organise.png` });
   await page.locator('#phase-continue').click(); // Finish
 
+  // generalisation: intro page, then two 1-minute tasks in an empty world. Drop the target pair from the palette
+  // next to each other; a roll can fail (10%), so drop a fresh pair elsewhere and try again (up to 4 pairs).
+  await page.getByRole('button', { name: 'Start' }).click();
+  const canvas = page.locator('canvas.world-canvas');
+  const doTask = async (name, a, b, gapPx, shot) => {
+    await canvas.waitFor();
+    await page.waitForTimeout(300);
+    const box = await canvas.boundingBox();
+    let ok = false;
+    for (let i = 0; i < 4 && !ok; i++) {
+      // clear of the controls legend (top right) and the inspect panel (bottom left)
+      const cx = 340 + i * 90;
+      const cy = box.height * 0.55 - i * 40;
+      await page.locator(`.palette .pick[data-token="${a}"]`).dragTo(canvas, { targetPosition: { x: cx, y: cy } });
+      await page.locator(`.palette .pick[data-token="${b}"]`).dragTo(canvas, { targetPosition: { x: cx + gapPx, y: cy } });
+      await page.waitForTimeout(1200);
+      ok = (await page.locator('#task-status.done').count()) > 0;
+    }
+    await page.screenshot({ path: `${OUT}/${shot}` });
+    console.log(`task ${name}: success shown = ${ok}`);
+    if (ok) await page.locator('#phase-continue').click();
+    else await page.locator('#phase-skip').click();
+  };
+  await doTask('lock', '0:1', '0:3', 22, 'runthrough_5_task_lock.png'); // purple + green cells (zoom 2: 11 world units apart)
+  await doTask('catalysis', '1:0', '1:2', 124, 'runthrough_6_task_catalysis.png'); // light blue + red organisms
+
   // end screen: download
   const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#download-data').click()]);
   const path = 'tests/fixtures/browser-session.json';
@@ -445,13 +471,17 @@ for (const hier of [1, 0]) {
     const final = log.events.find((e) => e.type === 'final_state');
     console.log('notepad events:', notes.join(' '), '| final notes:', JSON.stringify(final.payload.notes));
     console.log('final report:', JSON.stringify(final.payload.report));
+    for (const g of log.generalisation ?? []) {
+      const end = g.events.find((e) => e.type === 'task_end');
+      console.log(`generalisation ${g.header.config.task}:`, JSON.stringify(end?.payload), 'spawns logged:', g.events.filter((e) => e.type === 'action' && e.payload.kind === 'spawn').length);
+    }
   }
   const backup = await page.evaluate(() => {
     const k = localStorage.getItem('levels-sandbox-last');
     return k ? (localStorage.getItem(k)?.length ?? 0) : 0;
   });
   console.log('localStorage backup bytes:', backup);
-  await page.screenshot({ path: `${OUT}/runthrough_5_end.png` });
+  await page.screenshot({ path: `${OUT}/runthrough_7_end.png` });
   await page.close();
 }
 

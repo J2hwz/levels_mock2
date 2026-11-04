@@ -376,3 +376,14 @@
 .report .row.wrap {
   flex-wrap: wrap;
 }
+
+/* generalisation tasks: palette greys out when used up; success message */
+.palette.spent {
+  opacity: 0.35;
+  pointer-events: none;
+}
+.task-status.done {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 15px;
+}

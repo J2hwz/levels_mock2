@@ -311,7 +311,9 @@ export type Action =
   | { kind: 'combine'; ids: number[] }
   | { kind: 'isolate'; id: number | null }
   | { kind: 'speed'; speed: number }
-  | { kind: 'swap'; id: number };
+  | { kind: 'swap'; id: number }
+  /** generalisation tasks: drop a new element into the world (a larger one arrives made of its recipe-0 parts) */
+  | { kind: 'spawn'; tier: Tier; type: number; x: number; y: number };
 
 export type SimEvent =
   | { kind: 'organism_death'; id: number; cause: 'health' | 'empty' | 'size'; cells: number[] }
@@ -1088,6 +1090,16 @@ function outsideBand(s: WorldState, e: Entity): boolean {
   return e.children.length < min || e.children.length >= unstable;
 }
 
+/** Drop a new free element into the world. Composites only exist in the hierarchy condition. */
+function spawn(s: WorldState, tier: Tier, type: number, x: number, y: number): void {
+  const kinds = tier === 0 ? P.nCellTypes : tier === 1 ? P.nSpecies : P.nHerdKinds;
+  if (!Number.isInteger(type) || type < 0 || type >= kinds || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  if (tier === 0) newEntity(s, 0, type, x, y);
+  else if (!s.config.hier) return;
+  else if (tier === 1) buildOrganism(s, type, 0, x, y, 0);
+  else if (tier === 2) buildHerd(s, type, 0, x, y, 0);
+}
+
 function validId(s: WorldState, id: number | null | undefined): id is number {
   return typeof id === 'number' && id >= 0 && id < s.entities.length && s.entities[id].alive;
 }
@@ -1147,6 +1159,9 @@ export function applyAction(s: WorldState, a: Action): SimEvent[] {
       break;
     case 'swap':
       if (validId(s, a.id)) swapRealisation(s, s.entities[a.id], events);
+      break;
+    case 'spawn':
+      spawn(s, a.tier, a.type, a.x, a.y);
       break;
     case 'select':
     case 'speed':

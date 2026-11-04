@@ -17,7 +17,7 @@ npm run build        # typecheck + production bundle in dist/
 # optional
 npx playwright install chromium   # once
 npm run screenshots  # 4 conditions + abstract skin + full scripted run-through -> screenshots/
-npm run replay -- path/to/levels-sandbox-42-....json   # verify a downloaded log
+npm run replay -- path/to/levels-sandbox-42-....json   # verify a downloaded file (main session + each task)
 ```
 
 Quick test link: `http://localhost:5173/?seed=42&short=1&debug=1`
@@ -218,7 +218,22 @@ Tier names appear only with `debug=1`.
    All report text (titles, questions, sentence parts, palette header) is in `REPORT` in `src/ui/report.ts` (`TUNE:`).
    Not scored in this mockup.
 
-jsPsych timeline: welcome → 3 instruction pages → sandbox → end screen with a download button.
+3. **Generalisation**: after the Report (so its prompts can't prime the report), an intro page and two tasks of
+   1 minute each. Each task is a **fresh, empty world** with the same seed, so it has the same laws and recipes as the
+   exploration world, and participants drag elements into it from a palette of all 12 pictures (the report's pictures;
+   only cells in the flat condition). A dropped larger thing arrives already made of its recipe-0 parts. The prompt
+   describes only the effect:
+   - **Task 1:** "Make two things stick together." Success = two **cells** bind by lock & key (the 90 % graded case).
+   - **Task 2:** "Make something start spinning." Success = an **organism** is made to spin by catalysis (the 90 % case).
+
+   Other outcomes (binding or spinning at another scale, combining with C) are logged but don't count. On success a
+   "Done!" message appears and **Continue** is enabled; otherwise the task ends when the minute is up. The chances are
+   the participant's own `chance` condition (under `none` the tasks can't succeed). At most 30 drops per task; no notepad.
+   Text, order, duration, drop limit and the target `{rule, tier}` of each task are in `GEN` in
+   `src/experiment/generalisation.ts` (`TUNE:`).
+
+jsPsych timeline: welcome → 3 instruction pages → sandbox (Explore + Report) → generalisation intro → task lock →
+task catalysis → end screen with a download button.
 
 ## Architecture
 
@@ -232,8 +247,8 @@ src/
     hash.ts        64-bit FNV-style hash of the exact float64 state
   render/          Pixi renderer, camera, skins, pure layout/hit-testing, pointer→Action input
   log/             logger (event stream) + Session (world + log; used by the app and by tests)
-  ui/              report (questions + picture tokens), notepad, inspect panel, time controls, phase banner
-  experiment/      jsPsych timeline, SandboxPlugin, sandbox app loop, download/backup
+  ui/              report (questions), picture tokens (tokens.ts), notepad, inspect panel, time controls, phase banner
+  experiment/      jsPsych timeline, SandboxPlugin, sandbox app loop (main + task mode), generalisation.ts (GEN), download/backup
   replay.ts        replay a log through sim/ and check every logged hash
 scripts/           screenshots.mjs (Playwright), replay.mjs (CLI)
 tests/             vitest; fixtures/browser-session.json is a real Chromium run-through log
@@ -260,7 +275,12 @@ all cell pairs, no hormone or density. Health belongs to 6 fixed circular region
 ## Data format
 
 Download: `levels-sandbox-<seed>-<ISO timestamp>.json`. A copy is kept in `localStorage` (key in
-`levels-sandbox-last`), refreshed every 10 s, at each phase change and at the end.
+`levels-sandbox-last`), refreshed every 10 s, at each phase change, after each task and at the end.
+
+The file is the main session's log (`header`, `events`) plus `generalisation`: one ordinary log per task, each with its own
+`header` (its `config` adds `task` and `herds: 0, lone: 0, free: 0`) and `events`, so each task world replays on its own.
+Task logs have the same event types, plus `task_success {task, tick}`, `task_end {task, success, success_tick, reason:
+"continue"|"time", spawns}`, and `final_state {task, success, spawns}`.
 
 ```jsonc
 {
@@ -279,7 +299,7 @@ Download: `levels-sandbox-<seed>-<ISO timestamp>.json`. A copy is kept in `local
 | type | payload |
 |---|---|
 | `session_start` | `{hash}` of the generated world |
-| `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids}` (2+, dragged first), `isolate{id}`, `speed{speed}`, `swap{id}`. Coordinates are sim/world units |
+| `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids}` (2+, dragged first), `isolate{id}`, `speed{speed}`, `swap{id}`, `spawn{tier, type, x, y}` (generalisation tasks: a dropped element). Coordinates are sim/world units |
 | `hover` | `{id}` on every hover-target change (`null` = nothing) |
 | `camera` | `{x, y, zoom}` every 250 ms |
 | `hash` | `{hash}` every 30 ticks (1 s of sim time) |
@@ -302,7 +322,7 @@ Download: `levels-sandbox-<seed>-<ISO timestamp>.json`. A copy is kept in `local
 
 `replay(log)` rebuilds the world from `header.config`, applies each logged action at its `t_tick` (actions logged at tick
 *t* were applied before the step *t → t+1*), checks every `hash` event and the final hash. `npm run replay -- file.json`
-does this from the command line.
+does this from the command line, for the main session and every `generalisation` task log.
 
 Same-engine determinism was not enough: **Chromium 156 and Node 26 disagree in the last bit of `Math.sin`/`Math.cos`**,
 so a browser log diverged in Node by tick 4. `sim/` therefore uses `sim/dmath.ts` (polynomial sin/cos and

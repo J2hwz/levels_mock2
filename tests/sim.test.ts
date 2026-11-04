@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { simConfigOf } from '../src/config';
+import { isTaskSuccess } from '../src/experiment/generalisation';
 import { replay } from '../src/replay';
 import { hashWorld } from '../src/sim/hash';
 import { COMPOSITION, DYNAMICS, type Dynamics, type Entity, P, PAIR_RULES, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, lockOn, memberTargets, pairKey, chanceOf, RULE_CAT, RULE_LOCK, type ChanceMode, naturalRadius, ringUnits, step } from '../src/sim/world';
@@ -89,6 +90,15 @@ describe('replay', () => {
       expect.objectContaining({ kind: 'makeup', n: 4, member: { tier: 1, type: 0 }, whole: { tier: 2, type: 0 } }),
       expect.objectContaining({ kind: 'other' }),
     ]));
+    // generalisation: one replayable log per task, each with its drops and an end record
+    expect(log.generalisation.map((g: { header: { config: { task: string } } }) => g.header.config.task)).toEqual(['lock', 'catalysis']);
+    for (const g of log.generalisation) {
+      const r = replay(g);
+      expect(r.mismatches).toEqual([]);
+      expect(r.ok).toBe(true);
+      expect(g.events.some((e: { type: string; payload: { kind?: string } }) => e.type === 'action' && e.payload.kind === 'spawn')).toBe(true);
+      expect(g.events.find((e: { type: string }) => e.type === 'task_end').payload).toMatchObject({ task: g.header.config.task, success: true });
+    }
   });
 
   it('detects a tampered log', () => {
@@ -1054,4 +1064,82 @@ describe('PAIR_RULES', () => {
       },
     );
   });
+});
+
+describe('generalisation tasks (spawn into an empty world)', () => {
+  const empty = (hier = true) => createWorld({ hier, eps: 0.05, seed: 42, herds: 0, lone: 0, free: 0, dyn: { lock: true, catalysis: true, similar: OFF } });
+
+  it('the task world is empty but has the same laws and recipes as the exploration world', () => {
+    const e = empty();
+    const full = createWorld({ hier: true, eps: 0.05, seed: 42, dyn: { lock: true, catalysis: true, similar: OFF } });
+    expect(e.entities).toHaveLength(0);
+    expect(e.laws).toEqual(full.laws);
+    expect(e.grammar).toEqual(full.grammar);
+  });
+
+  it('spawn drops a cell, or a composite already made of its recipe-0 parts', () => {
+    const s = empty();
+    applyAction(s, { kind: 'spawn', tier: 0, type: 1, x: 500, y: 500 });
+    applyAction(s, { kind: 'spawn', tier: 1, type: 3, x: 900, y: 500 });
+    applyAction(s, { kind: 'spawn', tier: 2, type: 0, x: 1400, y: 800 });
+    const tops = s.entities.filter((e) => e.alive && e.parent < 0);
+    expect(tops.map((e) => [e.tier, e.type])).toEqual([[0, 1], [1, 3], [2, 0]]);
+    const org = tops[1];
+    expect(org.children.map((c) => s.entities[c].type)).toEqual(s.grammar.species[3][0]);
+    const herd = tops[2];
+    expect(herd.children.map((c) => s.entities[c].type)).toEqual(s.grammar.herds[0][0]);
+    // nonsense is ignored
+    const n = s.entities.length;
+    applyAction(s, { kind: 'spawn', tier: 0, type: 9, x: 1, y: 1 });
+    expect(s.entities.length).toBe(n);
+  });
+
+  it('in the flat condition only cells can be dropped in', () => {
+    const s = empty(false);
+    applyAction(s, { kind: 'spawn', tier: 1, type: 0, x: 500, y: 500 });
+    applyAction(s, { kind: 'spawn', tier: 0, type: 0, x: 500, y: 500 });
+    expect(s.entities.map((e) => e.tier)).toEqual([0]);
+  });
+
+  it('a task session with spawns replays exactly', () => {
+    const session = testSession('?seed=42&herds=0&lone=0&free=0');
+    session.act({ kind: 'spawn', tier: 0, type: 1, x: 1200, y: 800 });
+    for (let t = 0; t < 20; t++) session.tick();
+    session.act({ kind: 'spawn', tier: 0, type: 3, x: 1210, y: 800 });
+    session.act({ kind: 'spawn', tier: 1, type: 0, x: 1300, y: 800 });
+    for (let t = 0; t < 200; t++) session.tick();
+    session.end();
+    const res = replay(JSON.parse(JSON.stringify(session.toJSON())));
+    expect(res.mismatches).toEqual([]);
+    expect(res.ok).toBe(true);
+  });
+
+  it('task success = the target mechanism at the target scale', () =>
+    withSettings(
+      () => {
+        DYNAMICS.lockChance = ALWAYS;
+        DYNAMICS.catChance = ALWAYS;
+      },
+      () => {
+        const s = empty();
+        applyAction(s, { kind: 'spawn', tier: 0, type: PURPLE, x: 1200, y: 800 });
+        applyAction(s, { kind: 'spawn', tier: 0, type: GREEN, x: 1211, y: 800 });
+        const evs = ticks(s, REVEAL + 2);
+        expect(evs.some((e) => isTaskSuccess('lock', e))).toBe(true);
+        expect(evs.some((e) => isTaskSuccess('catalysis', e))).toBe(false);
+
+        // organisms that bind are lock at the wrong scale: logged, but not a lock-task success
+        const t = empty();
+        applyAction(t, { kind: 'spawn', tier: 1, type: PURPLE, x: 1200, y: 800 });
+        applyAction(t, { kind: 'spawn', tier: 1, type: GREEN, x: 1262, y: 800 });
+        const tevs = ticks(t, REVEAL + 2);
+        expect(tevs.some((e) => e.kind === 'encounter' && e.rule === 'lock' && e.ok)).toBe(true);
+        expect(tevs.some((e) => isTaskSuccess('lock', e))).toBe(false);
+
+        const c = empty();
+        applyAction(c, { kind: 'spawn', tier: 1, type: LIGHT_BLUE, x: 1200, y: 800 });
+        applyAction(c, { kind: 'spawn', tier: 1, type: RED, x: 1262, y: 800 });
+        expect(ticks(c, REVEAL + 2).some((e) => isTaskSuccess('catalysis', e))).toBe(true);
+      },
+    ));
 });

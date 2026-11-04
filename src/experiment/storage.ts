@@ -5,10 +5,15 @@ export function backupKey(session: Session): string {
   return `levels-sandbox-${h.seed}-${h.started_at}`;
 }
 
+/** The data file: the main session's log, plus one ordinary log per generalisation task (each replayable). */
+export function dataFile(session: Session, tasks: Session[] = []): unknown {
+  return { ...session.toJSON(), generalisation: tasks.map((t) => t.toJSON()) };
+}
+
 /** Best-effort backup into localStorage. Returns false if storage is unavailable or full. */
-export function saveBackup(session: Session): boolean {
+export function saveBackup(session: Session, tasks: Session[] = []): boolean {
   try {
-    localStorage.setItem(backupKey(session), JSON.stringify(session.toJSON()));
+    localStorage.setItem(backupKey(session), JSON.stringify(dataFile(session, tasks)));
     localStorage.setItem('levels-sandbox-last', backupKey(session));
     return true;
   } catch {
@@ -22,8 +27,8 @@ export function fileName(session: Session): string {
   return `levels-sandbox-${h.seed}-${ts}.json`;
 }
 
-export function download(session: Session): void {
-  const blob = new Blob([JSON.stringify(session.toJSON())], { type: 'application/json' });
+export function download(session: Session, tasks: Session[] = []): void {
+  const blob = new Blob([JSON.stringify(dataFile(session, tasks))], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

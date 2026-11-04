@@ -45,6 +45,8 @@ export interface Config {
   exploreMs: number;
   /** were these values given explicitly in the URL? (seed is random otherwise) */
   seedFromUrl: boolean;
+  /** set only for a generalisation task session (empty world): which task it is */
+  task?: 'lock' | 'catalysis';
 }
 
 // =====================================================================================================

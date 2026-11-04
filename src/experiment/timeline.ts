@@ -3,6 +3,7 @@ import Instructions from '@jspsych/plugin-instructions';
 import { type JsPsych, initJsPsych } from 'jspsych';
 import type { Config } from '../config';
 import { Session } from '../log/session';
+import { GEN, type TaskKey } from './generalisation';
 import { SandboxPlugin } from './SandboxPlugin';
 import { download, fileName, saveBackup } from './storage';
 
@@ -23,6 +24,8 @@ export function buildSession(cfg: Config): Session {
 export function run(cfg: Config): JsPsych {
   const jsPsych = initJsPsych();
   let session: Session | null = null;
+  // one session (empty world + log) per generalisation task, in GEN.order
+  const tasks: Session[] = [];
   const minutes = Math.round(cfg.exploreMs / 6000) / 10;
 
   const welcome = {
@@ -30,7 +33,7 @@ export function run(cfg: Config): JsPsych {
     stimulus: `<div class="prose"><h1>Welcome</h1>
       <p>In this study you will explore a small world full of made-up living things.
       Nothing in it comes from Earth, so there is nothing you are expected to already know.</p>
-      <p>This is a test version. It takes about ${Math.ceil(minutes) + 5} minutes.</p></div>`,
+      <p>This is a test version. It takes about ${Math.ceil(minutes) + 5 + Math.ceil((GEN.order.length * GEN.durationMs) / 60000)} minutes.</p></div>`,
     choices: ['Begin'],
   };
 
@@ -73,6 +76,29 @@ export function run(cfg: Config): JsPsych {
     getSession: () => session,
   };
 
+  // generalisation: an intro page, then each task in its own empty world (same seed, so the same laws)
+  const genIntro = {
+    type: HtmlButtonResponse,
+    stimulus: `<div class="prose"><h2>Two short tasks</h2><p>${GEN.intro}</p></div>`,
+    choices: ['Start'],
+  };
+  const taskTrials = GEN.order.map((key: TaskKey) => {
+    let taskSession: Session | null = null;
+    return {
+      type: SandboxPlugin,
+      config: cfg,
+      task: key,
+      getSession: () => taskSession,
+      on_start: () => {
+        taskSession = buildSession({ ...cfg, herds: 0, lone: 0, free: 0, task: key });
+      },
+      on_finish: () => {
+        if (taskSession) tasks.push(taskSession);
+        if (session) saveBackup(session, tasks);
+      },
+    };
+  });
+
   const end = {
     type: HtmlButtonResponse,
     stimulus: () => `<div class="prose"><h1>Thank you!</h1>
@@ -85,12 +111,12 @@ export function run(cfg: Config): JsPsych {
       document.getElementById('download-data')?.addEventListener('click', () => {
         if (!session) return;
         session.log('download', { file: fileName(session) });
-        saveBackup(session);
-        download(session);
+        saveBackup(session, tasks);
+        download(session, tasks);
       });
     },
   };
 
-  void jsPsych.run([welcome, instructions, sandbox, end]);
+  void jsPsych.run([welcome, instructions, sandbox, genIntro, ...taskTrials, end]);
   return jsPsych;
 }
