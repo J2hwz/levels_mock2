@@ -72,7 +72,7 @@ src/
 scripts/           screenshots.mjs (Playwright run-through; re-records the replay fixture), replay.mjs (CLI)
 tests/             vitest: sim.test.ts (behaviour, determinism, replay), layout.test.ts, architecture.test.ts
   fixtures/browser-session.json   a real Chromium session log that must replay exactly
-screenshots/       output of `npm run screenshots` (committed, so changes are visible in review)
+screenshots/       output of `npm run screenshots` (git-ignored: regenerate locally and look at them)
 ```
 
 The data flow: input → `Action` → `Session.act` (logged) → `applyAction`. Then each tick, `step` → sim events (logged)
@@ -151,7 +151,7 @@ npm run replay -- tests/fixtures/browser-session.json
   first.
 - Commit messages: a short summary line, then bullet points on what changed and why. End with the attribution trailer
   the harness specifies.
-- Commit `screenshots/` and `tests/fixtures/browser-session.json` along with sim changes, so the fixture matches the code.
-- Never commit `node_modules/` or `dist/`.
+- Commit `tests/fixtures/browser-session.json` along with sim changes, so the fixture matches the code.
+- Never commit `node_modules/`, `dist/` or `screenshots/` (all git-ignored).
 - Other Claude instances may be working in parallel. Check `git status` before large edits, and don't revert changes you
   didn't make; mention them instead.
