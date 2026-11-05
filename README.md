@@ -22,6 +22,13 @@ npm run replay -- path/to/levels-sandbox-42-....json   # verify a downloaded fil
 
 Quick test link: `http://localhost:5173/?seed=42&short=1&debug=1`
 
+### Online demo (GitHub Pages)
+
+Every push to `main` runs `.github/workflows/deploy.yml` (tests, build, publish `dist/`). One-time setup on GitHub:
+Settings → Pages → Source: **GitHub Actions**. The demo is then at
+`https://j2hwz.github.io/levels_mock2/?seed=42&short=1`, and any URL parameter below works there too. Data files still
+download to the participant's own computer; nothing is sent anywhere.
+
 ## URL parameters
 
 | param   | values                    | default    | meaning |
