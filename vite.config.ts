@@ -21,5 +21,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     environment: 'node',
+    // replay / determinism tests run whole worlds for hundreds of ticks: 2-3 s locally, ~2x slower on CI runners
+    testTimeout: 30_000,
   },
 });
