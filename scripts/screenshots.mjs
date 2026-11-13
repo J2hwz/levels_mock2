@@ -1,4 +1,4 @@
-// Playwright: screenshots of the four hier x size conditions (debug=1), plus a full
+// Playwright: screenshots of the conditions (composition yes / no, flat; debug=1), plus a full
 // scripted run-through whose downloaded log is saved as a replay fixture.
 // Usage: npm run screenshots
 
@@ -44,29 +44,32 @@ async function stats(page) {
   });
 }
 
-// ---- 1. four conditions
-for (const hier of [1, 0]) {
-  for (const size of ['proxy', 'irrelevant']) {
-    const q = `?hier=${hier}&size=${size}&seed=42&debug=1&short=1`;
-    const page = await openSandbox(q);
-    await page.waitForTimeout(3000);
-    const [c, o, h] = await stats(page);
-    const file = `${OUT}/hier${hier}_${size}.png`;
-    await page.screenshot({ path: file });
-    console.log(`${file}: cells=${c} organisms=${o} herds=${h}`);
-    // zoomed view on the first herd (or the centre in flat)
-    await page.evaluate(() => {
-      const sb = window.__sandbox;
-      const herd = sb.state.entities.find((e) => e.alive && e.tier === 2);
-      const n = herd ? sb.layout()[herd.id] : { x: 1200, y: 800 };
-      sb.camera.x = n.x;
-      sb.camera.y = n.y;
-      sb.camera.zoom = herd ? Math.min(6, 300 / Math.max(n.r, 20)) : 1.6;
-    });
-    await page.waitForTimeout(400);
-    await page.screenshot({ path: `${OUT}/hier${hier}_${size}_zoom.png` });
-    await page.close();
+// ---- 1. conditions: composition yes / no (hierarchy), plus the flat world
+for (const [name, q0] of [['hier1_composition_yes', 'hier=1&composition=yes'], ['hier1_composition_no', 'hier=1&composition=no'], ['hier0', 'hier=0']]) {
+  const page = await openSandbox(`?${q0}&seed=42&debug=1&short=1`);
+  await page.waitForTimeout(3000);
+  const [c, o, h] = await stats(page);
+  const file = `${OUT}/${name}.png`;
+  await page.screenshot({ path: file });
+  console.log(`${file}: cells=${c} organisms=${o} herds=${h}`);
+  // zoomed view on the first herd (or the centre in flat), with the pointer hovering it: composition=no shows nothing inside
+  const centre = await page.evaluate(() => {
+    const sb = window.__sandbox;
+    const herd = sb.state.entities.find((e) => e.alive && e.tier === 2);
+    const n = herd ? sb.layout()[herd.id] : { x: 1200, y: 800 };
+    sb.camera.x = n.x;
+    sb.camera.y = n.y;
+    sb.camera.zoom = herd ? Math.min(6, 300 / Math.max(n.r, 20)) : 1.6;
+    return herd ? herd.id : -1;
+  });
+  await page.waitForTimeout(300);
+  if (centre >= 0) {
+    const [x, y] = await screenPos(page, centre);
+    await page.mouse.move(x, y);
   }
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${OUT}/${name}_zoom_hover.png` });
+  await page.close();
 }
 
 // abstract skin, one shot per hierarchy condition
@@ -77,9 +80,63 @@ for (const hier of [1, 0]) {
   await page.close();
 }
 
+// across sizes (cross=1: only different-size pairs interact): a purple cell dragged onto a green organism binds,
+// then lets go after DYNAMICS.bondTicks (12 s)
+{
+  const page = await openSandbox('?seed=42&debug=1&short=1&reveal=0&cross=1&move=0');
+  await page.waitForTimeout(500);
+  // a free green organism and the free purple cell nearest to it, both in view
+  const ids = await page.evaluate(() => {
+    const s = window.__sandbox.state;
+    const org = s.entities.find((e) => e.alive && e.tier === 1 && e.parent < 0 && e.type === 3);
+    const cells = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 1);
+    const cell = cells.reduce((best, c) => (Math.hypot(c.x - org.x, c.y - org.y) < Math.hypot(best.x - org.x, best.y - org.y) ? c : best));
+    const d = Math.hypot(cell.x - org.x, cell.y - org.y);
+    Object.assign(window.__sandbox.camera, { x: (org.x + cell.x) / 2, y: (org.y + cell.y) / 2, zoom: Math.min(3, 500 / Math.max(d, 1)) });
+    return { org: org.id, cell: cell.id };
+  });
+  await page.waitForTimeout(200);
+  // drop point: just off the organism's edge, on the cell's side (target[0..1]); pulled-away point (target[2..3])
+  const target = await page.evaluate(({ org, cell }) => {
+    const s = window.__sandbox.state;
+    const o = s.entities[org];
+    const c = s.entities[cell];
+    const r = window.__sandbox.layout()[org].r;
+    const d = Math.hypot(c.x - o.x, c.y - o.y) || 1;
+    const k = r + 6 + 4;
+    return [o.x + ((c.x - o.x) / d) * k, o.y + ((c.y - o.y) / d) * k, o.x + ((c.x - o.x) / d) * (k + 100), o.y + ((c.y - o.y) / d) * (k + 100)];
+  }, ids);
+  const [x, y] = await screenPos(page, ids.cell);
+  await page.mouse.click(x, y);
+  await page.waitForTimeout(200);
+  /** drag the (selected) cell to world point (wx, wy) */
+  const dragCell = async (wx, wy) => {
+    const [x, y] = await screenPos(page, ids.cell);
+    const [tx, ty] = await page.evaluate(([wx, wy]) => window.__sandbox.worldToScreen(wx, wy), [wx, wy]);
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let i = 1; i <= 12; i++) await page.mouse.move(x + ((tx - x) * i) / 12, y + ((ty - y) * i) / 12);
+    await page.mouse.up();
+  };
+  // the cell-organism chance is below 1: on a failed roll, pull it away and try again (up to 5 times)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await dragCell(target[0], target[1]);
+    await page.waitForTimeout(700);
+    if ((await page.evaluate(({ cell }) => window.__sandbox.state.entities[cell].bond, ids)) >= 0) break;
+    await dragCell(target[2], target[3]);
+    await page.waitForTimeout(200);
+  }
+  await page.screenshot({ path: `${OUT}/cross_size_bond.png` });
+  const bond = await page.evaluate(({ cell }) => window.__sandbox.state.entities[cell].bond, ids);
+  await page.waitForTimeout(12500);
+  const later = await page.evaluate(({ cell }) => window.__sandbox.state.entities[cell].bond, ids);
+  console.log(`cross=1: purple cell #${ids.cell} next to green organism #${ids.org}: bond ${bond} (organism ${ids.org}); 12.5 s later: bond ${later}`);
+  await page.close();
+}
+
 // mechanisms (lock & key: purple + green; catalysis: light blue makes red spin; every level, by chance), contents always shown
 {
-  const page = await openSandbox('?seed=42&debug=1&short=1&reveal=0');
+  const page = await openSandbox('?seed=42&debug=1&short=1&reveal=0&cross=0');
   await page.waitForTimeout(3000);
   await page.screenshot({ path: `${OUT}/hier1_dynamics.png` });
   await page.locator('[data-speed="0"]').click();
@@ -252,7 +309,7 @@ for (const hier of [1, 0]) {
 
 // ---- 2. full run-through (hier=1, proxy) through every phase, then download the log
 {
-  const page = await openSandbox('?hier=1&size=proxy&seed=7&debug=1&short=1');
+  const page = await openSandbox('?hier=1&seed=7&debug=1&short=1&cross=0');
   await page.waitForTimeout(1000);
   // zoom onto a herd
   const ids = await page.evaluate(() => {

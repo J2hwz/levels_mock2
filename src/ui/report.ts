@@ -2,7 +2,8 @@
 // later ones.
 //   1. an open description of the world (nothing structured shown yet)
 //   2. fill-in-the-blank rules: picture tokens of every element (no level names) dragged into sentence blanks,
-//      outcomes in free text, after one worked example taken from the real composition
+//      outcomes in free text, after one worked example that shows the format only ("5 × ? make up ?"), so it states
+//      no fact about the world and is identical in every condition
 //   3. an open question on how they would organise the world
 // Every edit is reported through onEvent (logged as `report` events).
 
@@ -33,7 +34,9 @@ export const REPORT = {
     },
   ],
   palette: 'Things in this world, at each scale',
-  example: 'For example:',
+  example: 'For example (with your own pictures in the blanks):',
+  /** the number in the worked example; the pictures are always grey "?" placeholders */
+  exampleN: 5,
   interaction: { label: '+ “When … is near …” rule', when: 'When', near: 'is near', placeholder: 'what happens?' },
   makeup: { label: '+ “… make up …” rule', makeUp: 'make up' },
   other: { label: '+ Other rule', placeholder: 'Any other rule, in your own words' },
@@ -72,7 +75,6 @@ export class ReportPanel {
 
   constructor(
     private readonly look: TokenLook,
-    private readonly example: { n: number; member: Token; whole: Token },
     private readonly onEvent: (e: ReportEvent) => void,
   ) {
     this.stepEls = [this.openStep(0, 'describe'), this.rulesStep(), this.openStep(2, 'organise')];
@@ -118,9 +120,9 @@ export class ReportPanel {
       for (let type = 0; type < 4; type++) row.append(this.paletteToken({ tier, type }));
       this.palette.append(row);
     }
-    const ex = this.example;
+    const placeholder = () => h('span', { class: 'blank placeholder', 'aria-label': 'a picture' }, '?');
     const exampleLine = h('div', { class: 'rule-line example' },
-      h('span', { class: 'n' }, String(ex.n)), '×', this.staticToken(ex.member), REPORT.makeup.makeUp, this.staticToken(ex.whole));
+      h('span', { class: 'n' }, String(REPORT.exampleN)), '×', placeholder(), REPORT.makeup.makeUp, placeholder());
     const add = (kind: ReportRule['kind'], label: string) =>
       h('button', { class: 'small', id: `report-add-${kind}`, onclick: () => this.addRule(kind) }, label);
     return h('div', { class: 'report-step', 'data-step': '1' },

@@ -359,6 +359,12 @@
 .report .blank.over {
   border-color: var(--accent);
 }
+.report .blank.placeholder {
+  cursor: default;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 18px;
+}
 .report .n,
 .report .n-input {
   width: 3.2em;

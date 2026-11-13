@@ -27,6 +27,8 @@ export function run(cfg: Config): JsPsych {
   // one session (empty world + log) per generalisation task, in GEN.order
   const tasks: Session[] = [];
   const minutes = Math.round(cfg.exploreMs / 6000) / 10;
+  // composition=no: leave out the lines about abilities that don't exist there (looking inside, parts, combining, bars)
+  const comp = cfg.composition;
 
   const welcome = {
     type: HtmlButtonResponse,
@@ -43,8 +45,8 @@ export function run(cfg: Config): JsPsych {
     pages: [
       `<div class="prose"><h2>Looking around</h2>
         <ul>
-          <li><b>Hover</b> over something to highlight it${cfg.reveal ? ' and see what is inside it' : ''}. <b>Click</b> to select it.</li>
-          <li><b>Click again</b> on the same spot to select something bigger that it is part of.</li>
+          <li><b>Hover</b> over something to highlight it${cfg.reveal && comp ? ' and see what is inside it' : ''}. <b>Click</b> to select it.</li>
+          ${comp ? '<li><b>Click again</b> on the same spot to select something bigger that it is part of.</li>' : ''}
           <li><b>Esc</b> clears the selection.</li>
           <li><b>Scroll</b> to zoom. <b>Drag the background</b> to move around.</li>
           <li>Use the time buttons at the top to pause, slow down or speed up.</li>
@@ -53,16 +55,21 @@ export function run(cfg: Config): JsPsych {
       `<div class="prose"><h2>Doing things</h2>
         <ul>
           <li><b>Drag</b> a selected thing to move it.</li>
-          <li><b>Shift + drag</b> a selected thing to pull it out of whatever it is in (anything stuck to it comes too), or off whatever it is stuck to.</li>
+          ${comp
+            ? `<li><b>Shift + drag</b> a selected thing to pull it out of whatever it is in (anything stuck to it comes too), or off whatever it is stuck to.</li>
           <li>Dropping things next to each other just lets them meet. To <b>combine</b> things, press <b>C</b> while you are still dragging:
-            what you are dragging joins, or combines with, whatever it is touching.</li>
+            what you are dragging joins, or combines with, whatever it is touching.</li>`
+            : `<li><b>Shift + drag</b> a selected thing to pull it off whatever it is stuck to.</li>
+          <li>Dropping things next to each other just lets them meet.</li>`}
           <li>Press <b>I</b> to freeze everything except the selected thing. Press I again to unfreeze.</li>
         </ul></div>`,
       `<div class="prose"><h2>Your first task</h2>
         <p>For about ${minutes} minute${minutes === 1 ? '' : 's'}, just <b>explore</b>. Watch, poke and try things out.
         Try to work out how this world works.</p>
-        <p>Some things carry a small bar. If a bar runs out, that thing falls apart. You can help if you like,
-        but exploring is what matters most.</p>
+        ${comp
+          ? `<p>Some things carry a small bar. If a bar runs out, that thing falls apart. You can help if you like,
+        but exploring is what matters most.</p>`
+          : ''}
         <p>Afterwards you will be asked to describe what you found out.</p></div>`,
     ],
     on_finish: () => {

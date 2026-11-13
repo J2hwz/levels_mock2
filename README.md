@@ -11,7 +11,7 @@ Stack: Vite + TypeScript (strict) · PixiJS v8 · jsPsych v8 · Vitest · Playwr
 ```bash
 npm install
 npm run dev          # opens on http://localhost:5173
-npm test             # vitest: determinism, replay, conditions, size dial, architecture
+npm test             # vitest: determinism, replay, conditions, layout, architecture
 npm run build        # typecheck + production bundle in dist/
 
 # optional
@@ -34,16 +34,16 @@ download to the participant's own computer; nothing is sent anywhere.
 | param   | values                    | default    | meaning |
 |---------|---------------------------|------------|---------|
 | `hier`  | `1` \| `0`                | `1`        | hierarchy condition (cells/organisms/herds) vs flat (cells only) |
-| `size`  | `proxy` \| `irrelevant`   | `proxy`    | size grows with tier vs size drawn at random regardless of tier |
+| `composition` | `yes` \| `no`     | `yes`      | **condition.** `yes`: organisms and herds show what they are made of on hover, and participants can combine, join and pull things apart; composites drain and fall apart outside their size band. `no`: the same world (same seed, same parts behind the scenes), but parts are never shown or usable: hovering shows only the colour, clicks select only whole things, C, drop-to-join and pulling parts out do nothing, nothing drains or falls apart, no health bars, the inspect panel shows 0 visible parts, and the instructions and Controls box leave out those abilities. Lock & key and catalysis still work between whole things |
 | `skin`  | `biology` \| `abstract`   | `biology`  | rendering only; the simulation is identical |
 | `seed`  | integer                   | random     | world seed (the random default is logged in the header) |
 | `eps`   | 0..1                      | `0.05`     | cross-unit leakage |
 | `move`  | `1` \| `0`                | `1`        | `1`: things drift (self-propulsion, laws, noise). `0`: still world, nothing moves unless dragged |
-| `laws`  | `1` \| `0`                | `1`        | `0`: no laws. The interaction matrices, swimming and turning are zeroed. Every free-standing cell, organism and herd does a persistent random walk instead: it heads in a random direction that drifts (~3 s persistence) and bounces off walls, the same for every type. Contact, springs, downward causation and `lock`/`catalysis`/`similar` still apply. The starting world is identical to `laws=1` for the same seed |
-| `wander`| 0..5                      | `1`        | `laws=0` only: strength of the random walk. `0` = jiggle on the spot. At `1`, organisms from different units meet ~13 times per 2 min (laws on: ~17) |
+| `movement` | `random` \| `laws`   | `random`   | **condition.** `random`: no laws. The interaction matrices, swimming and turning are zeroed. Every free-standing cell, organism and herd does a persistent random walk instead: it heads in a random direction that drifts (~3 s persistence) and bounces off walls, the same for every type. Contact, springs, downward causation and `lock`/`catalysis`/`similar` still apply. `laws`: seed-drawn laws decide how each type moves (attraction/repulsion matrices, swimming, turning). The starting world is identical in both for the same seed. In code and in the sim this is `SimConfig.laws` (`movement=laws` ⇔ `laws: true`) |
+| `wander`| 0..5                      | `1`        | `movement=random` only: strength of the random walk. `0` = jiggle on the spot. At `1`, organisms from different units meet ~13 times per 2 min (with laws: ~17) |
 | `reveal`| `1` \| `0`                | `1`        | `1`: organisms and herds show only their colour until hovered. `0`: contents always visible |
-| `lock`  | `1` \| `0`                | `1`        | lock & key at every level (purple + green bind; chance per encounter 90 % cells / 40 % organisms / 10 % herds) |
-| `catalysis` | `1` \| `0`            | `1`        | catalysis at every level (light blue makes red spin; chance per encounter 40 % cells / 90 % organisms / 10 % herds) |
+| `lock`  | `1` \| `0`                | `1`        | lock & key at every level (purple + green bind; same-size chance per encounter 90 % cells / 50 % organisms / 10 % herds; different sizes: see "Size-pair chances"). Every bond lets go after 12 s (`DYNAMICS.bondTicks`) |
+| `catalysis` | `1` \| `0`            | `1`        | catalysis at every level (light blue makes red spin; same-size chance per encounter 50 % cells / 90 % organisms / 10 % herds; different sizes: see "Size-pair chances") |
 | `similar` | levels                  | none       | similarity ("birds of a feather") at these levels |
 | `org`   | `min-unstable`            | `5-8`      | membrane size band: stable with 5–7 cells, drains below 5 or at 8+ |
 | `herd`  | `min-unstable`            | `3-7`      | haze size band: stable with 3–6 membranes |
@@ -51,11 +51,49 @@ download to the participant's own computer; nothing is sent anywhere.
 | `herds` | 0..12                     | `7`        | number of herds (hazes) at the start |
 | `lone`  | 0..40                     | `18`       | number of lone organisms (membranes) at the start |
 | `same`  | `0` \| `1`                | `0`        | `0`: same-colour cells never attract each other through the laws (same-colour repulsion and all other laws stay). `1`: the seed decides, as before |
-| `chance` | `graded` \| `uniform` \| `none` | `graded` | how likely lock & key and catalysis are per encounter. `graded`: the per-level tables `DYNAMICS.lockChance` / `catChance` (lock 90 / 40 / 10 %, catalysis 40 / 90 / 10 % for cells / organisms / herds). `uniform`: the mean of each table at every level (both 46.7 %). `none`: 0 everywhere, no interactions at all, so composition is the only mechanism (also no pre-binding pull or bound-cell push). Laws and similarity are separate switches |
+| `chance` | `graded` \| `uniform` \| `none` | `graded` | how likely lock & key and catalysis are per encounter. **condition (skew).** `graded`: the per-level tables `DYNAMICS.lockChance` / `catChance` (lock 90 / 50 / 10 %, catalysis 50 / 90 / 10 % for cells / organisms / herds). `uniform`: the mean of each table for every size and size pair (both 50 %). The chance of each size pair then follows `cross` (see "Size-pair chances"). `none`: 0 everywhere, no interactions at all, so composition is the only mechanism (also no pre-binding pull or bound-cell push). Laws and similarity are separate switches |
+| `cross` | 0..1                      | drawn from the seed | **condition (who interacts), w.** 0 = only same-size pairs interact (cell–cell, organism–organism, herd–herd); ½ = every size pair at its full chance; 1 = only different-size pairs (cell–organism, cell–herd, organism–herd). Without `cross=` each participant gets w drawn uniformly in [0, 1) from their seed (`crossFromSeed` in `src/config.ts`; `DEFAULTS.cross` can fix it for everyone). Recorded in the header as `cross`. See "Size-pair chances" |
 | `short` | `1`                       | off        | Explore phase lasts 60 s instead of 6 min |
-| `debug` | `1`                       | off        | HUD (tick, hash, fps), entity labels, `S` = swap realisation, "skip ▸" phase button, `window.__sandbox` test hook |
+| `debug` | `1`                       | off        | HUD (the size-pair chance per encounter for lock & key and catalysis, also printed to the browser console; tick, hash, fps), entity labels, `S` = swap realisation, "skip ▸" phase button, `window.__sandbox` test hook |
 
 All parsed in `src/config.ts` and echoed into the session header.
+
+## Size-pair chances
+
+Lock & key and catalysis can happen between any two sizes. The chance that one encounter between a size-*i* and a
+size-*j* thing fires is a 3 × 3 table built from two conditions, skew (`chance`) and who interacts (`cross` = w). An
+interactive version with sliders is at https://claude.ai/artifact/A2KuEiTpp9duhL6t6CSk7k. The code is `chanceOf` in
+`src/sim/world.ts`.
+
+- **Inputs:** g = the per-size table (`DYNAMICS.lockChance` 0.9 / 0.5 / 0.1, `catChance` 0.5 / 0.9 / 0.1), with mean ḡ.
+  Skew s = 1 for `chance=graded` and 0 for `chance=uniform`.
+- **Same-size chance:** `d_i = (1 − s)·ḡ + s·g_i`. The mean of d is ḡ at every s, so skew moves chance between sizes
+  without changing its average.
+- **Starting chance of a pair:** `b_ii = d_i`. For different sizes, `b_ij = m(d_i, d_j)`, where m is the mean
+  (`DYNAMICS.crossMix`: `'mean'` | `'min'` | `'max'`).
+- **Who interacts:** same-size pairs × `α(w) = min(1, 2(1 − w))`, different-size pairs × `β(w) = min(1, 2w)`. So
+  `P_ii = α·b_ii` and `P_ij = β·b_ij`.
+- **Properties:**
+  - w = 0 is the old sandbox (same size only);
+  - at w = ½ every pair keeps its starting chance;
+  - w = 1 is different sizes only;
+  - the table is symmetric, and no chance exceeds max(g).
+- **`chance=none`:** 0 everywhere.
+- **Different-size pairs:** only **free-standing** things interact across sizes (a loose cell, a lone organism, a
+  herd), never a part inside a whole.
+  - They are near when the gap between their edges is below the **smaller** thing's `rangeMargin`, and apart above its
+    `apartMargin`.
+  - A cross-size bond is held by the larger thing's spring, and the pair is dragged as one.
+  - It breaks when either joins or combines into something.
+- **Timed bonds:** every lock & key bond, at any sizes and also inside wholes, lets go after `DYNAMICS.bondTicks` (360
+  ticks = 12 s).
+  - A free pair rolls again only after moving apart.
+  - Two parts of the same whole roll only once while they share it.
+- **Logs recorded before `cross` existed** have none in their header. They replay with the old behaviour: same size
+  only, permanent bonds.
+
+These are chances per encounter, not interaction counts. Cells meet each other far more often than anything meets a
+herd, so what participants see also depends on how often each pair meets.
 
 ## Tuning the interactions
 
@@ -66,7 +104,7 @@ for one run. To change a default, or to change *which* elements interact and *ho
 
 | what you want to change | where | notes |
 |---|---|---|
-| turn a mechanism on/off by default (`laws`, `same`, `lock`, `catalysis`) | `DEFAULTS` in `src/config.ts` | the URL overrides it per run |
+| change a condition's default (`hier`, `composition`, `movement`, `chance`) or turn a mechanism on/off by default (`same`, `lock`, `catalysis`) | `DEFAULTS` in `src/config.ts` | the URL overrides it per run |
 | turn similarity on by default at some levels | `parseConfig` in `src/config.ts`: `similar: levels(q.get('similar') ?? '0')` | `'0'` cells, `'0,1'` cells + organisms, `'all'` |
 | size bands, starting counts, movement | `DEFAULTS` in `src/config.ts` (`org`, `herd`, `free`, `herds`, `lone`, `move`, `wander`) | |
 | **how cells make organisms and organisms make herds (composition)** | `COMPOSITION` in `src/sim/world.ts` | see "Composition" below |
@@ -162,7 +200,7 @@ similarRepel: [false, true, true],
 2. `same=0` (default) removes same-colour attraction between cells.
 3. `PAIR_RULES.laws` overwrites the entries it names, so an explicit entry wins over `same=0`.
 
-`laws=0` zeroes every entry and ignores `PAIR_RULES.laws`. The flat condition (`hier=0`) always keeps its all-zero laws.
+`movement=random` zeroes every entry and ignores `PAIR_RULES.laws`. The flat condition (`hier=0`) always keeps its all-zero laws.
 
 ### Good to know
 
@@ -217,8 +255,9 @@ Tier names appear only with `debug=1`.
       - "When [ ] is near [ ], ______" (outcome in free text, so nothing about binding or spinning is suggested);
       - "[n] × [ ] make up [ ]";
       - "Other rule" (free text).
-      A greyed worked example comes first, built from the real recipe of the green organism (default:
-      "5 × [small green] make up [medium green]"), so it is always true for the current `COMPOSITION`.
+      A greyed worked example comes first. It shows the format only: "5 × [?] make up [?]", with grey placeholder
+      pictures (the number is `REPORT.exampleN`). It states no fact about the world, so it is the same in every
+      condition and tells `composition=no` participants nothing about what things are made of.
    3. *Organising the world* (open): "If you had to sort everything in this world into groups, how would you do it?
       Explain your groups." **Finish** ends the sandbox.
 
@@ -230,13 +269,13 @@ Tier names appear only with `debug=1`.
    exploration world, and participants drag elements into it from a palette of all 12 pictures (the report's pictures;
    only cells in the flat condition). A dropped larger thing arrives already made of its recipe-0 parts. The prompt
    describes only the effect:
-   - **Task 1:** "Make two things stick together." Success = two **cells** bind by lock & key (the 90 % graded case).
-   - **Task 2:** "Make something start spinning." Success = an **organism** is made to spin by catalysis (the 90 % case).
+   - **Task 1:** "Make two things stick together." Success = any two things bind by lock & key, at any sizes.
+   - **Task 2:** "Make something start spinning." Success = anything is made to spin by catalysis, at any sizes.
 
-   Other outcomes (binding or spinning at another scale, combining with C) are logged but don't count. On success a
+   Combining with C doesn't count. Which sizes did it is logged (`tiers`). On success a
    "Done!" message appears and **Continue** is enabled; otherwise the task ends when the minute is up. The chances are
-   the participant's own `chance` condition (under `none` the tasks can't succeed). At most 30 drops per task; no notepad.
-   Text, order, duration, drop limit and the target `{rule, tier}` of each task are in `GEN` in
+   the participant's own `chance` and `cross` (under `none` the tasks can't succeed). At most 30 drops per task; no notepad.
+   Text, order, duration, drop limit and the target `{rule}` of each task are in `GEN` in
    `src/experiment/generalisation.ts` (`TUNE:`).
 
 jsPsych timeline: welcome → 3 instruction pages → sandbox (Explore + Report) → generalisation intro → task lock →
@@ -286,15 +325,15 @@ Download: `levels-sandbox-<seed>-<ISO timestamp>.json`. A copy is kept in `local
 
 The file is the main session's log (`header`, `events`) plus `generalisation`: one ordinary log per task, each with its own
 `header` (its `config` adds `task` and `herds: 0, lone: 0, free: 0`) and `events`, so each task world replays on its own.
-Task logs have the same event types, plus `task_success {task, tick}`, `task_end {task, success, success_tick, reason:
-"continue"|"time", spawns}`, and `final_state {task, success, spawns}`.
+Task logs have the same event types, plus `task_success {task, tick, tiers}`, `task_end {task, success, success_tick, tiers, reason:
+"continue"|"time", spawns}` (`tiers`: the two sizes of the pair that did it, or `null`), and `final_state {task, success, spawns}`.
 
 ```jsonc
 {
   "header": {
     "app": "levels-sandbox", "version": "0.0.1", "git_hash": "7c6c013",
     "started_at": "2026-10-19T05:05:46.123Z", "seed": 42,
-    "config": { "hier": true, "size": "proxy", "skin": "biology", "seed": 42, "eps": 0.05, "short": false, "debug": false, "exploreMs": 360000, "seedFromUrl": true },
+    "config": { "hier": true, "composition": true, "movement": "random", "chance": "graded", "cross": 0.37, "skin": "biology", "seed": 42, "eps": 0.05, "short": false, "debug": false, "exploreMs": 360000, "seedFromUrl": true },
     "user_agent": "...", "screen": { "width": 1920, "height": 1080, "dpr": 1, "viewport_w": 1400, "viewport_h": 900 }
   },
   "events": [ { "t_tick": 0, "t_ms": 0.1, "type": "session_start", "payload": { "hash": "..." } }, ... ]
@@ -314,7 +353,7 @@ Task logs have the same event types, plus `task_success {task, tick}`, `task_end
 | `organism_death` | `{id, cause: "health"\|"empty"\|"size", cells}` (`size`: it fell apart outside its size band) |
 | `founded` | `{id, tier, type, realisation, members}` when a `combine` creates a new organism/herd |
 | `herd_dissolved` | `{id}` when emptied; `{id, cause: "size", organisms}` when it fell apart outside its size band |
-| `encounter` | `{rule: "lock"\|"catalysis", tier, a, b, ok}`: a roll took effect after its reveal; `ok` = they bound / the target started spinning (false if the roll failed or they left range in time) |
+| `encounter` | `{rule: "lock"\|"catalysis", tier, tierB, a, b, ok}` (`tier`/`tierB`: the levels of `a`/`b`; different for a cross-size pair): a roll took effect after its reveal; `ok` = they bound / the target started spinning (false if the roll failed or they left range in time) |
 | `region_depleted`, `swapped` | sim events |
 | `phase` | `{from, to, index}` |
 | `report` | `step{step}` (0 describe, 1 rules, 2 organise); `answer{q: "describe"\|"organise", from, to}`; `rule_add{id, kind: "interaction"\|"makeup"\|"other"}`; `rule_set{id, field, from, to}`; `rule_delete{id, rule}`. Tokens are `{tier, type}` (level and colour) |
@@ -330,6 +369,9 @@ Task logs have the same event types, plus `task_success {task, tick}`, `task_end
 `replay(log)` rebuilds the world from `header.config`, applies each logged action at its `t_tick` (actions logged at tick
 *t* were applied before the step *t → t+1*), checks every `hash` event and the final hash. `npm run replay -- file.json`
 does this from the command line, for the main session and every `generalisation` task log.
+Data files recorded before the conditions were renamed (header `config` with `laws` and `size`, no `movement` or
+`composition`) still replay: `simConfigOf` reads the old `laws` value when `movement` is missing, `size` only ever
+affected drawing, and a missing `composition` means `yes`.
 
 Same-engine determinism was not enough: **Chromium 156 and Node 26 disagree in the last bit of `Math.sin`/`Math.cos`**,
 so a browser log diverged in Node by tick 4. `sim/` therefore uses `sim/dmath.ts` (polynomial sin/cos and
@@ -372,8 +414,9 @@ Where the brief left something open, I chose the following.
 
 **Mechanisms** (`lock` and `catalysis` on by default; `similar` off by default)
 
-The rules are kept in `DYNAMICS` in `src/sim/world.ts`. Lock & key and catalysis act at **every level**, but only ever
-between two things of the **same** level (a cell never binds to or spins an organism). How likely they are is graded by level.
+The rules are kept in `DYNAMICS` in `src/sim/world.ts`. Lock & key and catalysis act at **every level** and, depending
+on `cross`, also between free-standing things of **different** sizes (see "Size-pair chances"). Below, "same level"
+describes same-size pairs; different-size pairs follow the same encounter rules.
 
 **Chance per encounter.** Two eligible things of the same level are **near** when the gap between their edges is below
 `rangeMargin` (10 / 20 / 60 units for cells / organisms / herds). The moment they come near, also while one of them is
@@ -394,8 +437,8 @@ Each result is logged as an `encounter` event.
 
 | mechanism | rule | chance per encounter (cells / organisms / herds) | other settings |
 |---|---|---|---|
-| lock & key | A purple and a green thing **bind** when two free, unbound ones of the same level come near and the roll succeeds. Before that, two free, unbound ones **pull gently together** (within 40 / 90 / 260 units; strength 50 / 20 / 8 at contact; needs `move=1`). The pull stops once their encounter has been rolled. A spring holds a bound pair touching, and it is dragged as one. Only Shift-drag separates them. Inside a whole (possible only with mixed recipes), unbound purple and green members pair up. A pair stays attached when it joins or combines, and sits together on its parent's ring. A bound cell **mildly pushes away other cells** within 30 units, so pairs don't clump | **90 % / 40 % / 10 %** | bond spring 60 / 30 / 8 |
-| catalysis | A light blue thing near a red one of the same level makes the red one **spin**, if the roll succeeds, for as long as they stay near. After contact ends it keeps spinning, slowing by 4 % per tick, and stops ~2 s later. A spinning cell turns its shape; a spinning organism or herd turns its ring of members, with a rim dot showing its orientation. Inside a whole (mixed recipes only), a catalyst and its target sit together | **40 % / 90 % / 10 %** | spin 3 / 3 / 1 rad/s |
+| lock & key | A purple and a green thing **bind** when two free, unbound ones of the same level come near and the roll succeeds. Before that, two free, unbound ones **pull gently together** (within 40 / 90 / 260 units; strength 50 / 20 / 8 at contact; needs `move=1`). The pull stops once their encounter has been rolled. A spring holds a bound pair touching, and it is dragged as one. It lets go after 12 s, or earlier with Shift-drag. Inside a whole (possible only with mixed recipes), unbound purple and green members pair up. A pair stays attached when it joins or combines, and sits together on its parent's ring. A bound cell **mildly pushes away other cells** within 30 units, so pairs don't clump | **90 % / 50 % / 10 %** (same size, w ≤ ½) | bond spring 60 / 30 / 8; every bond lasts 12 s |
+| catalysis | A light blue thing near a red one of the same level makes the red one **spin**, if the roll succeeds, for as long as they stay near. After contact ends it keeps spinning, slowing by 4 % per tick, and stops ~2 s later. A spinning cell turns its shape; a spinning organism or herd turns its ring of members, with a rim dot showing its orientation. Inside a whole (mixed recipes only), a catalyst and its target sit together | **50 % / 90 % / 10 %** (same size, w ≤ ½) | spin 3 / 3 / 1 rad/s |
 | similarity | like types attract, unlike types repel, with the same kernel as the laws. Purple–green pairs are exempt from the repulsion while lock is on | – (a force, always on where switched on) | gain 45 / 18 / 20 |
 
 The encounters already rolled for are world state (`contacts`). Like `bond` and `spin`, they are hashed and in snapshots.
@@ -419,7 +462,7 @@ free-standing ancestor's outline. Same-level collision is unchanged.
 - loose cells can no longer get into organisms or herds, so crowding mostly stops. Organism deaths fell from 3.6 to 0.6 per
   seed and time above the hormone threshold from 7.9 % to 0.8 %, so the health goal is now mostly quiet;
 - organisms from different units met 13.6 times per seed (was 18.6), as lone organisms now stop at herd edges
-  (`laws=0`: 6.9, was 12.2);
+  (`movement=random`: 6.9, was 12.2);
 - with lock on, the largest loose-cell clump averaged 3.3 cells, max 10 (was 6.4, max 32).
 
 **Still world and reveal**
@@ -433,11 +476,9 @@ free-standing ancestor's outline. Same-level collision is unchanged.
   is only visible on open things.
 
 **Display**
-- `size=irrelevant`: each *free-standing* entity's radius is a hash of (seed, id) drawn uniformly from 6–56 world units, whatever its tier. Members are drawn as a scaled copy of the physical layout fitted inside the parent. Positions on screen equal sim positions for free-standing entities, but physics still uses physical sizes, so a tiny-looking herd still takes up its physical space in collisions.
-- The radius–tier correlation test is computed over **free-standing entities**, pooled over 40 seeds (|r| < 0.1), and also over the per-entity draw for all entities. A nested member is necessarily smaller than its parent, so over all *drawn* nested entities radius cannot be fully tier-independent if members must fit inside parents. A proxy-mode control test asserts r > 0.7, so the test has teeth.
-- Tier cues in `irrelevant`: cells solid, organisms a membrane, herds a dashed boundary. In `proxy`, herds have a faint solid boundary.
+- Size always tracks level: what is drawn is the physical size (the old `size=irrelevant` condition was removed). Herds have a faint solid boundary.
 - Stress cue: a stressed cell darkens (up to 55 % toward black) and flickers as the noisy hormone signal approaches 0.6. It no longer turns red, because red is now an element colour.
-- Health bar above each organism (green → red), and above each region in the flat condition.
+- Health bar above each organism (green → red), and above each region in the flat condition. None on organisms or herds in `composition=no`.
 - Biology skin: dark background, translucent cells with a type-specific nucleus (dot / triangle / hexagon), wobbly membranes. Abstract skin: light background, solid circle / triangle / hexagon glyphs, plain outlines.
 - Membrane wobble is cosmetic and render-only (it does not touch the sim).
 
@@ -454,7 +495,6 @@ free-standing ancestor's outline. Same-level collision is unchanged.
 ## Known limitations
 
 - `localStorage` is ~5 MB; a long session with many snapshots may exceed it. The backup then fails silently (the download still works; the jsPsych trial records `backup_saved`).
-- In `size=irrelevant`, what you see and what collides are not the same thing (see above).
 - Tested headless in Chromium only (Playwright). Not yet checked in Firefox/Safari, on touch devices or on small screens.
 - Headless Chromium draws at ~30–50 fps with software rendering. A normal GPU browser should be at 60.
 

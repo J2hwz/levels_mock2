@@ -1,15 +1,8 @@
 // Pure display layout (no Pixi import, so it is unit-testable).
 // Maps every live entity to an on-screen circle in world coordinates.
-//
-// size=proxy:      display = physical: position = sim position, radius = natural radius
-// size=irrelevant: every free-standing entity gets a radius drawn from ONE shared range,
-//                  whatever its tier. Its members are drawn scaled down to fit inside it.
+// Display = physical: position = sim position, radius = natural radius (size always tracks level).
 
-import type { SizeMode } from '../config';
-import { hash01 } from '../sim/rng';
 import { type Entity, type WorldState, ancestors, naturalRadius } from '../sim/world';
-
-export const IRRELEVANT_RANGE: readonly [number, number] = [6, 56];
 
 export interface DisplayNode {
   id: number;
@@ -22,13 +15,7 @@ export interface DisplayNode {
 
 export type Layout = (DisplayNode | undefined)[];
 
-/** The per-entity radius draw from the shared range (independent of tier by construction). */
-export function nominalRadius(seed: number, id: number): number {
-  const [lo, hi] = IRRELEVANT_RANGE;
-  return lo + (hi - lo) * hash01(seed, id + 1);
-}
-
-export function computeLayout(s: WorldState, mode: SizeMode): Layout {
+export function computeLayout(s: WorldState): Layout {
   const out: Layout = new Array(s.entities.length);
   const place = (e: Entity, x: number, y: number, r: number) => {
     const nat = naturalRadius(s, e);
@@ -41,8 +28,7 @@ export function computeLayout(s: WorldState, mode: SizeMode): Layout {
   };
   for (const e of s.entities) {
     if (!e.alive || e.parent >= 0) continue;
-    const r = mode === 'proxy' ? naturalRadius(s, e) : nominalRadius(s.config.seed, e.id);
-    place(e, e.x, e.y, r);
+    place(e, e.x, e.y, naturalRadius(s, e));
   }
   return out;
 }
@@ -83,6 +69,14 @@ export function hitChain(s: WorldState, layout: Layout, wx: number, wy: number, 
     p = s.entities[p].parent;
   }
   return chain;
+}
+
+/**
+ * The hit chain participants can act on. composition=no (`compose: false`): only the whole thing, never a part,
+ * so a click selects it, "click again" has nothing above it and parts can't be dragged out.
+ */
+export function actionableChain(s: WorldState, chain: number[]): number[] {
+  return s.config.compose === false && chain.length > 1 ? [chain[chain.length - 1]] : chain;
 }
 
 /** Top-level ancestor (or itself, if free-standing) of each live id. Used to open composites on hover. */

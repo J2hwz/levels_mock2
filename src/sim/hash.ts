@@ -51,6 +51,8 @@ export function hashWorld(s: WorldState): string {
     h.num(e.density);
     h.num(e.realisation);
     h.num(e.bond);
+    // timed bonds exist only with `cross` set, so logs recorded before them still replay
+    if (s.config.cross !== undefined) h.num(e.bondUntil);
     h.num(e.spin);
     // only hashed where it is used, so logs recorded before it existed (laws=1) still replay
     if (s.config.laws === false) h.num(e.heading);

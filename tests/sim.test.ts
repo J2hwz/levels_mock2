@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { simConfigOf } from '../src/config';
+import { crossFromSeed, simConfigOf } from '../src/config';
 import { isTaskSuccess } from '../src/experiment/generalisation';
 import { replay } from '../src/replay';
 import { hashWorld } from '../src/sim/hash';
@@ -41,7 +41,7 @@ describe('determinism', () => {
 });
 
 describe('replay', () => {
-  it.each(['?seed=42', '?seed=42&move=0', '?seed=42&laws=0', '?seed=5&hier=0', '?seed=9&eps=0.3&size=irrelevant', '?seed=42&lock=all&catalysis=all&similar=all', '?seed=42&lock=0&catalysis=0', '?seed=42&chance=uniform', '?seed=42&chance=none', '?seed=5&hier=0&lock=0&catalysis=0&similar=0'])(
+  it.each(['?seed=42', '?seed=42&move=0', '?seed=42&movement=laws', '?seed=5&hier=0', '?seed=9&eps=0.3&composition=no', '?seed=42&lock=all&catalysis=all&similar=all', '?seed=42&lock=0&catalysis=0', '?seed=42&chance=uniform', '?seed=42&chance=none', '?seed=42&cross=0.5', '?seed=42&cross=1&chance=uniform', '?seed=5&hier=0&lock=0&catalysis=0&similar=0'])(
     'replays a recorded log (%s) to the logged final hash',
     (q) => {
       const session = testSession(q);
@@ -348,6 +348,104 @@ describe('laws=0', () => {
   });
 });
 
+// ---------------------------------------------------------------- composition=no
+
+describe('composition=no (compose: false): parts exist but can never be used or seen breaking apart', () => {
+  const world = (compose: boolean) => createWorld({ hier: true, eps: 0.05, seed: 42, compose });
+
+  it('generates exactly the same starting world as composition=yes', () => {
+    expect(world(false).entities).toEqual(world(true).entities);
+  });
+
+  it('join and combine are ignored, while composition=yes allows the same actions', () => {
+    for (const compose of [true, false]) {
+      const s = world(compose);
+      const org = s.entities.find((e) => e.tier === 1 && e.parent < 0)!;
+      const cell = s.entities.find((e) => e.tier === 0 && e.parent < 0 && canJoin(s, e.id, org.id))!;
+      expect(cell).toBeDefined();
+      applyAction(s, { kind: 'join', id: cell.id, parent: org.id });
+      expect(cell.parent).toBe(compose ? org.id : -1);
+
+      const n = COMPOSITION.sizes.organism[0];
+      const same = s.entities.filter((e) => e.tier === 0 && e.parent < 0 && e.bond < 0 && e.type === 3).slice(0, n);
+      const ids = same.map((e) => e.id);
+      expect(canCombine(s, ids)).toBe(true);
+      applyAction(s, { kind: 'combine', ids });
+      expect(same.every((e) => e.parent >= 0)).toBe(compose);
+    }
+  });
+
+  it('a part cannot be pulled out of its whole, but a free bound pair can still be unstuck', () => {
+    const s = world(false);
+    const cell = s.entities.find((e) => e.tier === 0 && e.parent >= 0)!;
+    const parent = cell.parent;
+    applyAction(s, { kind: 'detach', id: cell.id });
+    expect(cell.parent).toBe(parent);
+
+    const [a, b] = s.entities.filter((e) => e.tier === 0 && e.parent < 0 && e.bond < 0);
+    a.bond = b.id;
+    b.bond = a.id;
+    applyAction(s, { kind: 'detach', id: a.id });
+    expect([a.bond, b.bond]).toEqual([-1, -1]);
+  });
+
+  it('organisms outside their size band never drain or fall apart (composition=yes: they do within 30 s)', () => {
+    // every generated organism has 5-7 cells; moving the band to [8, 9) after generation puts all of them outside it
+    const run = (compose: boolean) => {
+      const s = world(compose);
+      s.config.org = [8, 9];
+      const orgs = s.entities.filter((e) => e.tier === 1);
+      for (let i = 0; i < 900; i++) step(s, []);
+      return orgs;
+    };
+    expect(run(true).some((o) => !o.alive)).toBe(true);
+    const kept = run(false);
+    expect(kept.every((o) => o.alive && o.health === 1)).toBe(true);
+  });
+
+  it('a composition=no session replays exactly', () => {
+    const session = testSession('?seed=7&composition=no');
+    const script = scriptedActions(session);
+    for (let t = 0; t < 300; t++) {
+      for (const a of script.get(session.state.tick) ?? []) session.act(a);
+      session.tick();
+    }
+    session.end();
+    expect(replay(session.toJSON()).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------- condition names in the link
+
+describe('conditions in the link: composition and movement', () => {
+  it('composition=yes|no and movement=random|laws are read; defaults are composition=yes, movement=random', () => {
+    expect(testConfig('?seed=1').composition).toBe(true);
+    expect(testConfig('?seed=1').movement).toBe('random');
+    expect(testConfig('?seed=1&composition=no').composition).toBe(false);
+    expect(testConfig('?seed=1&composition=yes').composition).toBe(true);
+    expect(testConfig('?seed=1&movement=laws').movement).toBe('laws');
+  });
+
+  it('the old link names laws= and size= are ignored', () => {
+    const c = testConfig('?seed=1&laws=1&size=irrelevant');
+    expect(c.movement).toBe('random');
+    expect('size' in c || 'laws' in c).toBe(false);
+  });
+
+  it('maps onto the sim: movement -> laws, composition -> compose', () => {
+    expect(simConfigOf(testConfig('?seed=1&movement=laws')).laws).toBe(true);
+    expect(simConfigOf(testConfig('?seed=1')).laws).toBe(false);
+    expect(simConfigOf(testConfig('?seed=1&composition=no')).compose).toBe(false);
+    expect(simConfigOf(testConfig('?seed=1')).compose).toBe(true);
+  });
+
+  it('headers of logs recorded before the rename (laws, no movement) still give the same sim config', () => {
+    expect(simConfigOf({ hier: true, eps: 0.05, seed: 1, laws: false }).laws).toBe(false);
+    expect(simConfigOf({ hier: true, eps: 0.05, seed: 1, laws: true }).laws).toBe(true);
+    expect(simConfigOf({ hier: true, eps: 0.05, seed: 1 }).compose).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------- same-level dynamics and size bands
 
 const OFF = [false, false, false];
@@ -558,7 +656,7 @@ describe('lock & key (purple + green, every level, chance per encounter)', () =>
         const evs = ticks(s, REVEAL);
         expect(a.bond).toBe(b.id); // bound while still held
         expect(Math.abs(Math.hypot(a.x - b.x, a.y - b.y) - 2 * P.cellR)).toBeLessThan(0.5); // snapped to touching
-        expect(evs.filter((e) => e.kind === 'encounter')).toEqual([{ kind: 'encounter', rule: 'lock', tier: 0, a: Math.min(a.id, b.id), b: Math.max(a.id, b.id), ok: true }]);
+        expect(evs.filter((e) => e.kind === 'encounter')).toEqual([{ kind: 'encounter', rule: 'lock', tier: 0, tierB: 0, a: Math.min(a.id, b.id), b: Math.max(a.id, b.id), ok: true }]);
         const bx = b.x;
         applyAction(s, { kind: 'dragMove', id: a.id, x: a.x + 80, y: a.y });
         expect(b.x - bx).toBeCloseTo(80, 6);
@@ -740,16 +838,17 @@ describe('catalysis (light blue makes red spin, every level, chance per encounte
 });
 
 describe('chance conditions (chance=graded|uniform|none)', () => {
+  const mean = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
   it('uniform: every level gets the mean of its table', () => {
     const c = { hier: true, eps: 0.05, seed: 1, chance: 'uniform' as ChanceMode };
     for (const tier of [0, 1, 2]) {
-      expect(chanceOf(c, 'lock', tier)).toBeCloseTo((0.9 + 0.4 + 0.1) / 3, 12);
-      expect(chanceOf(c, 'catalysis', tier)).toBeCloseTo((0.4 + 0.9 + 0.1) / 3, 12);
+      expect(chanceOf(c, 'lock', tier)).toBeCloseTo(mean(DYNAMICS.lockChance), 12);
+      expect(chanceOf(c, 'catalysis', tier)).toBeCloseTo(mean(DYNAMICS.catChance), 12);
     }
     const s = smallWorld({ lock: true }, 'uniform');
     for (const tier of [0, 1, 2]) {
       const rate = successRate(s, tier, PURPLE, GREEN, 300, (a, b) => a.bond === b.id);
-      expect(Math.abs(rate - 0.467)).toBeLessThan(0.08);
+      expect(Math.abs(rate - mean(DYNAMICS.lockChance))).toBeLessThan(0.08);
     }
   });
 
@@ -1114,7 +1213,7 @@ describe('generalisation tasks (spawn into an empty world)', () => {
     expect(res.ok).toBe(true);
   });
 
-  it('task success = the target mechanism at the target scale', () =>
+  it('task success = the target mechanism, between things of any sizes', () =>
     withSettings(
       () => {
         DYNAMICS.lockChance = ALWAYS;
@@ -1128,18 +1227,238 @@ describe('generalisation tasks (spawn into an empty world)', () => {
         expect(evs.some((e) => isTaskSuccess('lock', e))).toBe(true);
         expect(evs.some((e) => isTaskSuccess('catalysis', e))).toBe(false);
 
-        // organisms that bind are lock at the wrong scale: logged, but not a lock-task success
+        // organisms that bind count too (any sizes)
         const t = empty();
         applyAction(t, { kind: 'spawn', tier: 1, type: PURPLE, x: 1200, y: 800 });
         applyAction(t, { kind: 'spawn', tier: 1, type: GREEN, x: 1262, y: 800 });
         const tevs = ticks(t, REVEAL + 2);
-        expect(tevs.some((e) => e.kind === 'encounter' && e.rule === 'lock' && e.ok)).toBe(true);
-        expect(tevs.some((e) => isTaskSuccess('lock', e))).toBe(false);
+        expect(tevs.some((e) => isTaskSuccess('lock', e))).toBe(true);
 
         const c = empty();
         applyAction(c, { kind: 'spawn', tier: 1, type: LIGHT_BLUE, x: 1200, y: 800 });
         applyAction(c, { kind: 'spawn', tier: 1, type: RED, x: 1262, y: 800 });
         expect(ticks(c, REVEAL + 2).some((e) => isTaskSuccess('catalysis', e))).toBe(true);
+      },
+    ));
+});
+
+// ---------------------------------------------------------------- size-pair chances (cross) and timed bonds
+
+describe('size-pair chances: who interacts across sizes (cross = w)', () => {
+  const PURPLE_ = 1;
+  const GREEN_ = 3;
+  const cfg = (cross: number | undefined, chance: ChanceMode = 'graded') => ({ hier: true, eps: 0.05, seed: 1, chance, cross });
+  const mean = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  /** an empty, still world with lock & key and catalysis on */
+  const world = (cross: number | undefined, seed = 42) =>
+    createWorld({ hier: true, eps: 0.05, seed, move: false, herds: 0, lone: 0, free: 0, cross, dyn: { lock: true, catalysis: true, similar: OFF } });
+  /** spawn a cell of type ct and an organism of type ot, their edges 2 units apart; returns [cell, organism] */
+  const cellAndOrganism = (s: WorldState, ct: number, ot: number, x = 1200, y = 800) => {
+    applyAction(s, { kind: 'spawn', tier: 1, type: ot, x, y });
+    const org = s.entities.filter((e) => e.tier === 1).at(-1)!;
+    applyAction(s, { kind: 'spawn', tier: 0, type: ct, x: x - naturalRadius(s, org) - P.cellR - 2, y });
+    const cell = s.entities.at(-1)!;
+    return [cell, org] as const;
+  };
+
+  it('chanceOf: w = 0 is today (diagonal only), w = 1/2 every pair at full, w = 1 different sizes only', () => {
+    for (const rule of ['lock', 'catalysis'] as const) {
+      const g = rule === 'lock' ? DYNAMICS.lockChance : DYNAMICS.catChance;
+      for (const t of [0, 1, 2]) {
+        expect(chanceOf(cfg(0), rule, t)).toBeCloseTo(g[t], 12);
+        expect(chanceOf(cfg(0.5), rule, t)).toBeCloseTo(g[t], 12);
+        expect(chanceOf(cfg(1), rule, t)).toBe(0);
+        expect(chanceOf(cfg(undefined), rule, t)).toBeCloseTo(g[t], 12);
+      }
+      for (const [a, b] of [[0, 1], [0, 2], [1, 2]]) {
+        expect(chanceOf(cfg(0), rule, a, b)).toBe(0);
+        expect(chanceOf(cfg(undefined), rule, a, b)).toBe(0); // legacy: same size only
+        expect(chanceOf(cfg(0.5), rule, a, b)).toBeCloseTo((g[a] + g[b]) / 2, 12); // the mean rule
+        expect(chanceOf(cfg(1), rule, a, b)).toBeCloseTo((g[a] + g[b]) / 2, 12);
+        expect(chanceOf(cfg(0.25), rule, a, b)).toBeCloseTo((g[a] + g[b]) / 4, 12);
+      }
+    }
+  });
+
+  it('chanceOf: uniform gives the table mean on every pair; the table is symmetric and never above max(g)', () => {
+    for (const t of [0, 1, 2]) for (const u of [0, 1, 2]) expect(chanceOf(cfg(0.5, 'uniform'), 'lock', t, u)).toBeCloseTo(mean(DYNAMICS.lockChance), 12);
+    for (const w of [0, 0.1, 0.3, 0.5, 0.7, 0.9, 1]) {
+      for (const rule of ['lock', 'catalysis'] as const) {
+        const g = rule === 'lock' ? DYNAMICS.lockChance : DYNAMICS.catChance;
+        for (const t of [0, 1, 2]) {
+          for (const u of [0, 1, 2]) {
+            expect(chanceOf(cfg(w), rule, t, u)).toBeCloseTo(chanceOf(cfg(w), rule, u, t), 12);
+            expect(chanceOf(cfg(w), rule, t, u)).toBeLessThanOrEqual(Math.max(...g) + 1e-12);
+          }
+        }
+      }
+    }
+    expect(chanceOf(cfg(0.5, 'none'), 'lock', 0, 1)).toBe(0);
+  });
+
+  it('config: cross comes from the link, else from the seed (deterministic, about uniform over seeds)', () => {
+    expect(testConfig('?seed=5&cross=0.3').cross).toBe(0.3);
+    expect(testConfig('?seed=5&cross=7').cross).toBe(1);
+    expect(testConfig('?seed=5').cross).toBe(crossFromSeed(5));
+    expect(testConfig('?seed=5').cross).toBe(testConfig('?seed=5').cross);
+    expect(crossFromSeed(5)).not.toBe(crossFromSeed(6));
+    expect(simConfigOf(testConfig('?seed=5&cross=0.3')).cross).toBe(0.3);
+    const ws = Array.from({ length: 300 }, (_, i) => crossFromSeed(i + 1));
+    expect(ws.every((w) => w >= 0 && w < 1)).toBe(true);
+    expect(Math.abs(mean(ws) - 0.5)).toBeLessThan(0.08);
+    expect(ws.filter((w) => w < 0.5).length / ws.length).toBeGreaterThan(0.4);
+    expect(ws.filter((w) => w < 0.5).length / ws.length).toBeLessThan(0.6);
+  });
+
+  it('a purple cell and a green organism bind, move as one, let go after bondTicks, and only roll again after moving apart', () =>
+    withSettings(
+      () => {
+        DYNAMICS.lockChance = ALWAYS;
+      },
+      () => {
+        const s = world(0.5);
+        const [cell, org] = cellAndOrganism(s, PURPLE_, GREEN_);
+        const evs = ticks(s, REVEAL + 1);
+        expect(cell.bond).toBe(org.id);
+        // the organism was spawned first, so it is `a` (lower id) and the event names its level first
+        expect(evs.filter((e) => e.kind === 'encounter')).toEqual([{ kind: 'encounter', rule: 'lock', tier: 1, tierB: 0, a: org.id, b: cell.id, ok: true }]);
+        // dragging the organism takes the cell along
+        const cx = cell.x;
+        applyAction(s, { kind: 'dragStart', id: org.id, x: org.x, y: org.y });
+        applyAction(s, { kind: 'dragMove', id: org.id, x: org.x + 50, y: org.y });
+        applyAction(s, { kind: 'dragEnd', id: org.id });
+        expect(cell.x - cx).toBeCloseTo(50, 6);
+        // the bond lasts bondTicks from when it formed, then lets go; still touching, no new roll
+        ticks(s, DYNAMICS.bondTicks);
+        expect(cell.bond).toBe(-1);
+        expect(org.bond).toBe(-1);
+        const again = ticks(s, 60);
+        expect(again.some((e) => e.kind === 'encounter')).toBe(false);
+        expect(cell.bond).toBe(-1);
+        // moved apart and back: a new roll, and they bind again
+        place(s, cell.id, org.x - naturalRadius(s, org) - 300, org.y);
+        ticks(s, 1);
+        place(s, cell.id, org.x - naturalRadius(s, org) - P.cellR - 2, org.y);
+        ticks(s, REVEAL + 1);
+        expect(cell.bond).toBe(org.id);
+      },
+    ));
+
+  it('w = 0 or no cross at all: a cell and an organism never interact', () =>
+    withSettings(
+      () => {
+        DYNAMICS.lockChance = ALWAYS;
+        DYNAMICS.catChance = ALWAYS;
+      },
+      () => {
+        for (const w of [0, undefined]) {
+          const s = world(w);
+          cellAndOrganism(s, PURPLE_, GREEN_);
+          cellAndOrganism(s, LIGHT_BLUE, RED, 1600, 800);
+          const evs = ticks(s, REVEAL + 5);
+          expect(evs.some((e) => e.kind === 'encounter')).toBe(false);
+          expect(s.contacts.size).toBe(0);
+        }
+      },
+    ));
+
+  it('a light blue cell next to a red organism makes the organism spin', () =>
+    withSettings(
+      () => {
+        DYNAMICS.catChance = ALWAYS;
+      },
+      () => {
+        const s = world(0.5);
+        const [, org] = cellAndOrganism(s, LIGHT_BLUE, RED);
+        ticks(s, REVEAL + 2);
+        expect(org.spin).toBe(DYNAMICS.catSpin[1]);
+      },
+    ));
+
+  it('a cell-organism lock binds at the size-pair chance (300 encounters)', () => {
+    const s = world(0.5, 3);
+    const [cell, org] = cellAndOrganism(s, PURPLE_, GREEN_);
+    const touch = () => place(s, cell.id, org.x - naturalRadius(s, org) - P.cellR - 2, org.y);
+    let hits = 0;
+    for (let i = 0; i < 300; i++) {
+      touch();
+      ticks(s, REVEAL + 1);
+      if (cell.bond === org.id) hits++;
+      applyAction(s, { kind: 'detach', id: cell.id });
+      place(s, cell.id, org.x - naturalRadius(s, org) - 300, org.y);
+      ticks(s, 1);
+    }
+    expect(Math.abs(hits / 300 - chanceOf(s.config, 'lock', 0, 1))).toBeLessThan(0.08);
+  });
+
+  it('a cell bound to an organism that joins another organism loses that bond; parts never meet across sizes', () =>
+    withSettings(
+      () => {
+        DYNAMICS.lockChance = ALWAYS;
+      },
+      () => {
+        const s = world(0.5);
+        const [cell, org] = cellAndOrganism(s, PURPLE_, GREEN_);
+        ticks(s, REVEAL + 1);
+        expect(cell.bond).toBe(org.id);
+        applyAction(s, { kind: 'spawn', tier: 1, type: PURPLE_, x: 900, y: 800 });
+        const home = s.entities.filter((e) => e.tier === 1).at(-1)!;
+        expect(canJoin(s, cell.id, home.id)).toBe(true);
+        applyAction(s, { kind: 'join', id: cell.id, parent: home.id });
+        expect(cell.parent).toBe(home.id);
+        expect([cell.bond, org.bond]).toEqual([-1, -1]);
+        // a member cell sitting right next to a free organism never gets an encounter with it
+        ticks(s, 1);
+        const member = s.entities[home.children[0]];
+        place(s, org.id, home.x + naturalRadius(s, home) + naturalRadius(s, org) + 2, home.y);
+        ticks(s, REVEAL + 2);
+        for (const key of s.contacts.keys()) expect([Math.floor(key / 1e6), key % 1e6]).not.toContain(member.id);
+      },
+    ));
+});
+
+describe('timed lock & key bonds (DYNAMICS.bondTicks, with cross set)', () => {
+  const world = (cross: number | undefined) =>
+    createWorld({ hier: true, eps: 0.05, seed: 42, move: false, herds: 0, lone: 0, free: 0, cross, dyn: { lock: true, catalysis: false, similar: OFF } });
+
+  it('two free cells let go after bondTicks; without cross (legacy) the bond is permanent', () =>
+    withSettings(
+      () => {
+        DYNAMICS.lockChance = ALWAYS;
+      },
+      () => {
+        for (const cross of [0, undefined]) {
+          const s = world(cross);
+          applyAction(s, { kind: 'spawn', tier: 0, type: PURPLE, x: 1200, y: 800 });
+          applyAction(s, { kind: 'spawn', tier: 0, type: GREEN, x: 1200 + 2 * P.cellR + 2, y: 800 });
+          const [a, b] = s.entities;
+          ticks(s, REVEAL + 1);
+          expect(a.bond).toBe(b.id);
+          ticks(s, DYNAMICS.bondTicks);
+          expect(a.bond).toBe(cross === undefined ? b.id : -1);
+          expect(a.bondUntil).toBe(-1);
+        }
+      },
+    ));
+
+  it('a pair bound inside an organism lets go after bondTicks and stays apart while they share it', () =>
+    withSettings(
+      () => {
+        DYNAMICS.lockChance = ALWAYS;
+      },
+      () => {
+        const s = world(0);
+        applyAction(s, { kind: 'spawn', tier: 1, type: 0, x: 1200, y: 800 });
+        const org = s.entities[0];
+        const [m0, m1] = org.children.map((id) => s.entities[id]);
+        m0.type = PURPLE;
+        m1.type = GREEN;
+        ticks(s, 1);
+        expect(m0.bond).toBe(m1.id);
+        expect(m0.bondUntil).toBeGreaterThan(0);
+        ticks(s, DYNAMICS.bondTicks + 60);
+        expect([m0.bond, m1.bond]).toEqual([-1, -1]);
+        expect(m0.parent).toBe(org.id);
       },
     ));
 });

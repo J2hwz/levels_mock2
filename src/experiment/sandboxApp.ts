@@ -10,7 +10,7 @@ import { type Layout, computeLayout } from '../render/layout';
 import { Renderer } from '../render/renderer';
 import { SKINS, hex } from '../render/skins';
 import { hashWorld } from '../sim/hash';
-import { type Action, P, type Tier } from '../sim/world';
+import { type Action, P, type Tier, chanceOf } from '../sim/world';
 import { ControlsLegend, InspectPanel, type InspectInfo, PhaseBanner, TimeControls } from '../ui/controls';
 import { h } from '../ui/dom';
 import { Notepad } from '../ui/notepad';
@@ -59,7 +59,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   const timeControls = new TimeControls((s) => setSpeed(s));
   const banner = new PhaseBanner(timeControls.el, cfg.debug);
   const shell = h('div', { class: `sandbox skin-${cfg.skin}` }, banner.el, h('div', { class: 'main' }, stage, side));
-  const legend = new ControlsLegend(cfg.debug, cfg.reveal, cfg.lock, (open) => session.log('legend', { open }));
+  const legend = new ControlsLegend(cfg.debug, cfg.reveal, cfg.lock, cfg.composition, (open) => session.log('legend', { open }));
   // participant notes, available in every phase of the main sandbox (starts closed; bottom right of the world)
   const notepad = new Notepad(
     (open) => session.log('notepad_toggle', { open }),
@@ -82,7 +82,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   let selected = -1;
   let hovered = -1;
   let speed = 1;
-  let layout: Layout = computeLayout(state, cfg.size);
+  let layout: Layout = computeLayout(state);
 
   const act = (a: Action) => {
     session.act(a);
@@ -125,15 +125,12 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     return { css: hex(skin.herd[e.type]), name: skin.herdNames[e.type] };
   };
 
-  // ---- report (phase 2): the worked example is the green organism's real recipe, so it is always true
-  const greenRecipe = state.grammar.species[3][0];
-  const memberType = [0, 1, 2, 3].reduce((best, t) => (greenRecipe.filter((x) => x === t).length > greenRecipe.filter((x) => x === best).length ? t : best), 3);
+  // ---- report (phase 2): its worked example is a format-only placeholder, the same in every condition
   const report = new ReportPanel(
     {
       colours: [skin.cell.map(hex), skin.species.map(hex), skin.herd.map(hex)],
       shapes: skin.wobble > 0 ? skin.nucleus : skin.glyph,
     },
-    { n: greenRecipe.filter((x) => x === memberType).length, member: { tier: 0, type: memberType }, whole: { tier: 1, type: 3 } },
     (e) => {
       session.log('report', e);
       if (e.op === 'step') showReportStep();
@@ -143,7 +140,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   // ---- generalisation task: palette of all elements (only cells in the flat condition), dropped onto the world
   const look = { colours: [skin.cell.map(hex), skin.species.map(hex), skin.herd.map(hex)], shapes: skin.wobble > 0 ? skin.nucleus : skin.glyph };
   let spawns = 0;
-  let success: { tick: number } | null = null;
+  let success: { tick: number; tiers: [number, number] } | null = null;
   const taskStatus = h('p', { class: 'task-status', id: 'task-status' });
   const taskPalette = h('div', { class: 'palette' });
   for (let tier = 0; tier < (cfg.hier ? 3 : 1); tier++) {
@@ -234,10 +231,11 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     let n = 0;
     while (acc >= TICK_MS && n < MAX_TICKS_PER_FRAME) {
       const evs = session.tick();
-      if (task && !success && evs.some((e) => isTaskSuccess(task, e))) {
-        // the target mechanism happened at the target scale: say so, and let them move on
-        success = { tick: state.tick };
-        session.log('task_success', { task, tick: state.tick });
+      const hit = task && !success ? evs.find((e) => isTaskSuccess(task, e)) : undefined;
+      if (task && hit && hit.kind === 'encounter') {
+        // the target mechanism happened (any sizes): say so, and let them move on
+        success = { tick: state.tick, tiers: [hit.tier, hit.tierB] };
+        session.log('task_success', { task, tick: state.tick, tiers: success.tiers });
         taskStatus.textContent = GEN.success;
         taskStatus.classList.add('done');
         banner.set(`Task ${GEN.order.indexOf(task) + 1} of ${GEN.order.length}`, GEN.tasks[task].prompt, true, 'Continue');
@@ -249,8 +247,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     if (selected >= 0 && !state.entities[selected]?.alive) selected = -1;
     if (hovered >= 0 && !state.entities[hovered]?.alive) hovered = -1;
 
-    layout = computeLayout(state, cfg.size);
-    renderer.draw(state, layout, { selected, hovered, debug: cfg.debug, size: cfg.size, reveal: cfg.reveal, skin, time: (performance.now() - t0) / 1000, flash: performance.now() < flash.until ? flash.id : -1 });
+    layout = computeLayout(state);
+    renderer.draw(state, layout, { selected, hovered, debug: cfg.debug, contents: !cfg.composition ? 'never' : cfg.reveal ? 'hover' : 'always', skin, time: (performance.now() - t0) / 1000, flash: performance.now() < flash.until ? flash.id : -1 });
     inspect.update(inspectInfo());
     legend.setIsolated(state.isolated >= 0);
 
@@ -267,13 +265,30 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     }
     if (cfg.debug) {
       hud.textContent =
+        chanceText +
         `tick ${state.tick}  hash ${hashWorld(state)}  fps ${fps.toFixed(0)}  speed ${speed}×\n` +
-        `hier=${cfg.hier ? 1 : 0} size=${cfg.size} skin=${cfg.skin} seed=${cfg.seed} eps=${cfg.eps}\n` +
+        `hier=${cfg.hier ? 1 : 0} composition=${cfg.composition ? 'yes' : 'no'} movement=${cfg.movement} chance=${cfg.chance} cross=${cfg.cross.toFixed(2)} skin=${cfg.skin} seed=${cfg.seed} eps=${cfg.eps}\n` +
         `alive: ${[0, 1, 2].map((t) => state.entities.filter((e) => e.alive && e.tier === t).length).join('/')} (cells/organisms/herds)` +
         `  isolated=${state.isolated}  events=${session.logger.events.length}\n` +
         `keys: Esc clear · I isolate · S swap realisation (debug)`;
     }
   };
+
+  // debug: the size-pair chance per encounter (chanceOf) for this world's config, fixed for the session
+  const SIZES = ['cell', 'org', 'herd'];
+  const matrix = (rule: 'lock' | 'catalysis') => [0, 1, 2].map((a) => [0, 1, 2].map((b) => chanceOf(state.config, rule, a, b)));
+  const chanceText = (() => {
+    const on = { lock: state.config.dyn?.lock === true, catalysis: state.config.dyn?.catalysis === true };
+    const head = (rule: 'lock' | 'catalysis') => `${(rule === 'lock' ? 'lock & key' : 'catalysis') + (on[rule] ? '' : ' (off)')}`.padEnd(18) + SIZES.map((x) => x.padStart(6)).join('');
+    const row = (rule: 'lock' | 'catalysis', a: number) => SIZES[a].padEnd(18) + matrix(rule)[a].map((p) => p.toFixed(2).padStart(6)).join('');
+    const lines = [`${head('lock')}    ${head('catalysis')}`];
+    for (const a of [0, 1, 2]) lines.push(`${row('lock', a)}    ${row('catalysis', a)}`);
+    return `chance per encounter (chance=${cfg.chance}, cross w=${cfg.cross.toFixed(3)})\n${lines.join('\n')}\n`;
+  })();
+  if (cfg.debug) {
+    console.log(chanceText);
+    console.table(Object.fromEntries(['lock', 'catalysis'].flatMap((rule) => [0, 1, 2].map((a) => [`${rule} ${SIZES[a]}`, Object.fromEntries(SIZES.map((x, b) => [x, +matrix(rule as 'lock' | 'catalysis')[a][b].toFixed(3)]))]))));
+  }
 
   const inspectInfo = (): InspectInfo | null => {
     if (selected < 0) return null;
@@ -286,7 +301,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
       colourName: c.name,
       size: n.r,
       speed: Math.round(Math.hypot(e.vx, e.vy)),
-      parts: e.children.length,
+      parts: cfg.composition ? e.children.length : 0, // composition=no: parts are never visible
       debug: cfg.debug ? `id ${e.id} · tier ${e.tier} · type ${e.type} · r${e.realisation} · health ${e.health.toFixed(2)}` : undefined,
     };
   };
@@ -304,7 +319,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     window.clearInterval(backupTimer);
     notepad.dispose();
     if (task) {
-      session.log('task_end', { task, success: success !== null, success_tick: success?.tick ?? null, reason, spawns });
+      session.log('task_end', { task, success: success !== null, success_tick: success?.tick ?? null, tiers: success?.tiers ?? null, reason, spawns });
       session.log('phase', { from: `task_${task}`, to: 'end', index: 1 });
       session.log('final_state', { task, success: success !== null, spawns });
     } else {

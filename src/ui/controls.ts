@@ -76,6 +76,8 @@ export class ControlsLegend {
     private readonly reveal: boolean,
     /** lock & key is on somewhere: some loose pairs stick together instead of combining */
     private readonly sticks: boolean,
+    /** composition=no: parts can't be seen, selected, pulled out or combined, so those rows are left out */
+    private readonly compose: boolean,
     private readonly onToggle: (open: boolean) => void,
   ) {
     this.render();
@@ -108,13 +110,15 @@ export class ControlsLegend {
     this.el.replaceChildren(
       h('div', { class: 'row' }, h('b', { class: 'grow' }, 'Controls'), toggle),
       h('table', {},
-        row(['Hover'], this.reveal ? 'highlight and look inside' : 'highlight'),
+        row(['Hover'], this.reveal && this.compose ? 'highlight and look inside' : 'highlight'),
         row(['Click'], 'select'),
-        row(['Click again'], 'select what it is part of'),
+        ...(this.compose ? [row(['Click again'], 'select what it is part of')] : []),
         row(['Esc'], 'clear selection'),
         row(['Drag'], 'move the selected thing'),
-        row(['Shift', 'Drag'], this.sticks ? 'pull it out of what it is in (what is stuck to it comes too), or off what it is stuck to' : 'pull it out of what it is in'),
-        row(['Drag', 'C'], 'combine it with whatever it is touching'),
+        ...(!this.compose
+          ? this.sticks ? [row(['Shift', 'Drag'], 'pull it off what it is stuck to')] : []
+          : [row(['Shift', 'Drag'], this.sticks ? 'pull it out of what it is in (what is stuck to it comes too), or off what it is stuck to' : 'pull it out of what it is in')]),
+        ...(this.compose ? [row(['Drag', 'C'], 'combine it with whatever it is touching')] : []),
         row(['I'], this.isolated ? 'unfreeze everything (frozen now)' : 'freeze everything except selection', this.isolated),
         row(['Scroll'], 'zoom'),
         row(['Drag background'], 'move around'),

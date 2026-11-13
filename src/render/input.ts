@@ -6,11 +6,12 @@
 //   C while dragging: join the compatible parent it touches, else combine it with every loose same-level
 //   thing touching it into a new parent; then keep dragging that whole. drag background: pan; wheel: zoom
 //   Esc: clear selection; I: isolate toggle; S (debug only): swap realisation; C: see above
+//   composition=no: only whole things can be hovered, selected or dragged, and C does nothing
 
 import type { Action, WorldState } from '../sim/world';
 import { canCombine, findCombineGroup, findJoinTarget } from '../sim/world';
 import type { Camera } from './camera';
-import { type Layout, displayToSim, hitChain } from './layout';
+import { type Layout, actionableChain, displayToSim, hitChain } from './layout';
 
 export interface InputHost {
   readonly state: WorldState;
@@ -82,7 +83,7 @@ export class InputController {
 
   private chainAt(sx: number, sy: number): number[] {
     const [wx, wy] = this.host.camera.screenToWorld(sx, sy);
-    return hitChain(this.host.state, this.host.layout(), wx, wy, HIT_MIN_PX / this.host.camera.zoom);
+    return actionableChain(this.host.state, hitChain(this.host.state, this.host.layout(), wx, wy, HIT_MIN_PX / this.host.camera.zoom));
   }
 
   private onDown(e: PointerEvent): void {
@@ -156,6 +157,7 @@ export class InputController {
     const d = this.down!;
     const s = this.host.state;
     const id = d.dragId;
+    if (s.config.compose === false) return; // nothing can be combined in composition=no
     this.flush();
     const target = findJoinTarget(s, id);
     if (target >= 0) {

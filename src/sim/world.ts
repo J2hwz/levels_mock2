@@ -22,6 +22,11 @@ export interface SimConfig {
   laws?: boolean;
   /** laws=0 only: strength multiplier of the persistent random walk. Missing = 1. */
   wander?: number;
+  /**
+   * false = composition hidden (the `composition=no` condition): composites keep their parts, but nothing can join,
+   * combine or leave a parent, and composites never drain or fall apart. Missing = true.
+   */
+  compose?: boolean;
   /** same-level dynamics switched on per tier. Missing = all off. */
   dyn?: Dynamics;
   /** size bands [min, unstable) for organisms / herds. Missing = DEFAULT_ORG / DEFAULT_HERD. */
@@ -39,6 +44,12 @@ export interface SimConfig {
    * 'uniform' = the mean of each table at every level, 'none' = never (composition is the only mechanism).
    */
   chance?: ChanceMode;
+  /**
+   * Who interacts, w in [0, 1]: 0 = only same-size pairs, 1/2 = every size pair at its full chance, 1 = only
+   * different-size pairs (see chanceOf). Set: lock & key bonds last DYNAMICS.bondTicks. Missing = legacy: same-size
+   * pairs only, permanent bonds.
+   */
+  cross?: number;
 }
 
 export type ChanceMode = 'graded' | 'uniform' | 'none';
@@ -57,10 +68,12 @@ export const DEFAULT_ORG: readonly [number, number] = [5, 8];
 export const DEFAULT_HERD: readonly [number, number] = [3, 7];
 
 // =====================================================================================================
-// TUNE: within-level mechanisms. Which pairs bind / catalyse, how likely, and how strong every mechanism is.
-// Switch mechanisms on/off in DEFAULTS (src/config.ts) or the URL. See README "Tuning the interactions".
-// Types at every level: 0 light blue, 1 purple, 2 red, 3 green. Per-level arrays are [cells, organisms, herds].
-// Interactions only ever act between two things of the SAME level.
+// TUNE: interaction mechanisms. Which pairs bind / catalyse, how likely, and how strong every mechanism is.
+// Switch mechanisms on/off in DEFAULTS (src/config.ts) or the URL. See README "Tuning the interactions" and
+// "Size-pair chances". Types at every level: 0 light blue, 1 purple, 2 red, 3 green. Per-level arrays are
+// [cells, organisms, herds]. Lock & key and catalysis act between any two sizes, with the chance of the size pair
+// (chanceOf: lockChance / catChance, the `chance` condition and the who-interacts value `cross`). Different-size pairs
+// only interact between free-standing things. Similarity and the laws act within one level only.
 // =====================================================================================================
 
 /**
@@ -71,12 +84,16 @@ export const DEFAULT_HERD: readonly [number, number] = [3, 7];
 export const DYNAMICS = {
   /** lock & key: unordered pairs of types that can bind (purple + green), at every level */
   lockPairs: [[1, 3]] as readonly (readonly [number, number])[],
-  /** chance that an encounter of a lock pair binds them, per level */
-  lockChance: [0.9, 0.4, 0.1],
+  /** chance that an encounter of a lock pair binds them, per level (g in chanceOf; different sizes: see crossMix) */
+  lockChance: [0.9, 0.5, 0.1],
   /** catalysis: [catalyst, target]: the target spins while the catalyst is near it (light blue -> red) */
   catalysis: [[0, 2]] as readonly (readonly [number, number])[],
   /** chance that an encounter of catalyst and target makes the target spin (while they stay near), per level */
-  catChance: [0.4, 0.9, 0.1],
+  catChance: [0.5, 0.9, 0.1],
+  /** starting chance of a different-size pair from its two sizes' chances: 'mean' | 'min' | 'max' */
+  crossMix: 'mean' as 'mean' | 'min' | 'max',
+  /** how long every lock & key bond lasts, in ticks (360 = 12 s), at any sizes and also inside wholes (needs `cross`) */
+  bondTicks: 360,
   /** bond spring strength / damping, per level */
   bondK: [60, 30, 8],
   bondC: [6, 4, 2],
@@ -225,6 +242,8 @@ export interface Entity {
   health: number;
   /** lock & key partner (two free entities, or two members of the same whole), -1 = none */
   bond: number;
+  /** tick at which the lock & key bond lets go; -1 = permanent (legacy worlds without `cross`) */
+  bondUntil: number;
   /** T2: packing of its organisms (1 = nominal) */
   density: number;
   /** T1/T2: which recipe realises this species / herd kind */
@@ -322,7 +341,8 @@ export type SimEvent =
   | { kind: 'swapped'; id: number; realisation: number; removed: number[]; added: number[] }
   | { kind: 'founded'; id: number; tier: Tier; type: number; realisation: number; members: number[] }
   /** a roll's result took effect (after the reveal): ok = they bound / the target started spinning */
-  | { kind: 'encounter'; rule: 'lock' | 'catalysis'; tier: Tier; a: number; b: number; ok: boolean };
+  /** tier: a's level, tierB: b's level (the same for a same-size pair) */
+  | { kind: 'encounter'; rule: 'lock' | 'catalysis'; tier: Tier; tierB: Tier; a: number; b: number; ok: boolean };
 
 // ---------------------------------------------------------------- parameters
 
@@ -514,8 +534,7 @@ function pairWithin(s: WorldState, o: Entity): void {
       const ok = rand(s.rng) < chance;
       s.contacts.set(key, { rules: RULE_LOCK, ok: ok ? RULE_LOCK : 0, done: RULE_LOCK, tick: s.tick });
       if (ok) {
-        a.bond = d;
-        b.bond = c;
+        bind(s, a, b);
         break;
       }
     }
@@ -570,15 +589,36 @@ export function band(c: SimConfig, tier: Tier): readonly [number, number] {
 }
 
 /**
- * The chance that an encounter fires this rule at this level, under the `chance` condition: 'graded' = the table,
- * 'uniform' = the mean of the table at every level, 'none' = 0.
+ * The chance that an encounter between a size-ta and a size-tb thing fires this rule (README "Size-pair chances"):
+ *   g = the rule's per-size table, gbar = its mean, s = 1 ('graded') or 0 ('uniform')
+ *   d_i = (1 - s) gbar + s g_i                     same-size chance of size i
+ *   b_ii = d_i,  b_ij = m(d_i, d_j)                  starting chance of a pair (m = DYNAMICS.crossMix)
+ *   P_ii = min(1, 2(1 - w)) b_ii,  P_ij = min(1, 2w) b_ij     w = config.cross
+ * 'none' = 0. Without `cross` (legacy): P_ii = d_i and P_ij = 0.
  */
-export function chanceOf(c: SimConfig, rule: 'lock' | 'catalysis', tier: number): number {
+export function chanceOf(c: SimConfig, rule: 'lock' | 'catalysis', ta: number, tb: number = ta): number {
   const table = rule === 'lock' ? DYNAMICS.lockChance : DYNAMICS.catChance;
   const mode = c.chance ?? 'graded';
   if (mode === 'none') return 0;
-  if (mode === 'uniform') return table.reduce((sum, p) => sum + p, 0) / table.length;
-  return table[tier] ?? 0;
+  const mean = table.reduce((sum, p) => sum + p, 0) / table.length;
+  const d = (t: number) => (mode === 'uniform' ? mean : (table[t] ?? 0));
+  const w = c.cross;
+  if (ta === tb) return w === undefined ? d(ta) : Math.min(1, 2 * (1 - w)) * d(ta);
+  if (w === undefined) return 0;
+  const mix = DYNAMICS.crossMix;
+  const b = mix === 'min' ? Math.min(d(ta), d(tb)) : mix === 'max' ? Math.max(d(ta), d(tb)) : (d(ta) + d(tb)) / 2;
+  return Math.min(1, 2 * w) * b;
+}
+
+/** This rule can fire between some two different sizes. */
+export function crossOn(c: SimConfig, rule: 'lock' | 'catalysis'): boolean {
+  const on = rule === 'lock' ? c.dyn?.lock : c.dyn?.catalysis;
+  return on === true && c.hier && (chanceOf(c, rule, 0, 1) > 0 || chanceOf(c, rule, 0, 2) > 0 || chanceOf(c, rule, 1, 2) > 0);
+}
+
+/** Catalysis can make a thing of this level spin, with a partner of any size. */
+export function catalysisAnyOn(c: SimConfig, tier: number): boolean {
+  return catalysisOn(c, tier) || (c.dyn?.catalysis === true && [0, 1, 2].some((t) => t !== tier && chanceOf(c, 'catalysis', t, tier) > 0));
 }
 
 /** Lock & key is switched on and has a chance above 0 at this level. */
@@ -717,6 +757,7 @@ function newEntity(s: WorldState, tier: Tier, type: number, x: number, y: number
     hormone: 0,
     health: tier > 0 ? 1 : 0,
     bond: -1,
+    bondUntil: -1,
     density: tier === 2 ? 1 : 0,
     realisation: 0,
     heading: 0,
@@ -847,10 +888,28 @@ function removeChild(parent: Entity, childId: number): void {
   if (i >= 0) parent.children.splice(i, 1);
 }
 
+/** Lock & key: bind two things. With `cross` set the bond lasts DYNAMICS.bondTicks; without it, for good. */
+function bind(s: WorldState, a: Entity, b: Entity): void {
+  a.bond = b.id;
+  b.bond = a.id;
+  const until = s.config.cross === undefined ? -1 : s.tick + DYNAMICS.bondTicks;
+  a.bondUntil = until;
+  b.bondUntil = until;
+}
+
+/** Bonded to a thing of another size (only free-standing things bind across sizes). */
+function crossBonded(s: WorldState, e: Entity): boolean {
+  return e.bond >= 0 && s.entities[e.bond].tier !== e.tier;
+}
+
 /** Break e's lock & key bond, if any. */
 function unbond(s: WorldState, e: Entity): void {
-  if (e.bond >= 0) s.entities[e.bond].bond = -1;
+  if (e.bond >= 0) {
+    s.entities[e.bond].bond = -1;
+    s.entities[e.bond].bondUntil = -1;
+  }
   e.bond = -1;
+  e.bondUntil = -1;
 }
 
 function kill(s: WorldState, e: Entity): void {
@@ -922,10 +981,13 @@ function translateHeld(s: WorldState, id: number, dx: number, dy: number): void 
   if (b >= 0) translateTree(s, b, dx, dy);
 }
 
-/** A free entity together with its bond partner (if any): a bound pair always joins / combines as one. */
+/**
+ * A free entity together with its same-size bond partner (if any): a bound pair always joins / combines as one.
+ * A partner of another size is not included; its bond breaks when the entity joins or combines.
+ */
 export function withPartner(s: WorldState, id: number): number[] {
   const b = s.entities[id].bond;
-  return b >= 0 ? [id, b] : [id];
+  return b >= 0 && s.entities[b].tier === s.entities[id].tier ? [id, b] : [id];
 }
 
 export function canJoin(s: WorldState, childId: number, parentId: number): boolean {
@@ -1002,7 +1064,7 @@ export function canCombine(s: WorldState, ids: readonly number[]): boolean {
   if (ms.some((m) => !m || !m.alive || m.parent >= 0)) return false;
   const tier = ms[0].tier;
   if (tier >= 2 || ms.some((m) => m.tier !== tier)) return false;
-  if (ms.some((m) => m.bond >= 0 && !ids.includes(m.bond))) return false;
+  if (ms.some((m) => m.bond >= 0 && !crossBonded(s, m) && !ids.includes(m.bond))) return false;
   return combineKind(s, tier, ms.map((m) => m.type)) !== null;
 }
 
@@ -1047,7 +1109,8 @@ function foundParent(s: WorldState, ids: readonly number[], events: SimEvent[]):
   p.vy = vy;
   p.angle = rand(s.rng) * Math.PI * 2;
   p.realisation = kind.realisation;
-  // bonds are kept: a lock & key pair stays attached inside the new organism
+  // same-size bonds are kept: a lock & key pair stays attached inside the new organism; bonds across sizes break
+  for (const m of ms) if (crossBonded(s, m)) unbond(s, m);
   for (const m of ms) {
     adopt(p, m);
     m.signal = 0;
@@ -1134,6 +1197,7 @@ export function applyAction(s: WorldState, a: Action): SimEvent[] {
       if (!validId(s, a.id)) break;
       const e = s.entities[a.id];
       if (e.parent >= 0) {
+        if (s.config.compose === false) break; // parts can't leave their whole
         const partner = e.bond >= 0 && s.entities[e.bond].parent === e.parent ? s.entities[e.bond] : null;
         if (e.bond >= 0 && !partner) unbond(s, e);
         unparent(s, e, events);
@@ -1145,14 +1209,17 @@ export function applyAction(s: WorldState, a: Action): SimEvent[] {
     }
     case 'join':
       // the entity joins with its bond partner, which stays attached inside
-      if (canJoin(s, a.id, a.parent)) {
+      if (s.config.compose !== false && canJoin(s, a.id, a.parent)) {
         const p = s.entities[a.parent];
-        for (const id of withPartner(s, a.id)) adopt(p, s.entities[id]);
+        for (const id of withPartner(s, a.id)) {
+          if (crossBonded(s, s.entities[id])) unbond(s, s.entities[id]);
+          adopt(p, s.entities[id]);
+        }
         pairWithin(s, p);
       }
       break;
     case 'combine':
-      if (canCombine(s, a.ids)) foundParent(s, a.ids, events);
+      if (s.config.compose !== false && canCombine(s, a.ids)) foundParent(s, a.ids, events);
       break;
     case 'isolate':
       s.isolated = validId(s, a.id) ? a.id : -1;
@@ -1204,6 +1271,14 @@ function advance(s: WorldState, events: SimEvent[]): void {
     if (ents[s.drag.id].bond >= 0) held[ents[s.drag.id].bond] = 1;
   }
 
+  // 0. lock & key bonds whose time is up let go (anywhere, also inside wholes). Their encounter stays on record, so a
+  // free pair rolls again only after moving apart, and siblings not while they share a whole.
+  for (const e of ents) if (e.alive && e.bond > e.id && e.bondUntil >= 0 && s.tick >= e.bondUntil) unbond(s, e);
+
+  // the edge gap below which a pair is "near" / above which it has moved apart: the smaller thing's margins
+  const rangeOf = (a: Entity, b: Entity) => DYNAMICS.rangeMargin[Math.min(a.tier, b.tier)];
+  const apartOf = (a: Entity, b: Entity) => DYNAMICS.apartMargin[Math.min(a.tier, b.tier)];
+
   // 0a. forget encounters that are over (the pair moved apart, or stopped being siblings), so they can roll again
   for (const [key] of s.contacts) {
     const a = ents[Math.floor(key / PAIR_KEY)];
@@ -1213,15 +1288,16 @@ function advance(s: WorldState, events: SimEvent[]): void {
       continue;
     }
     if (a.parent >= 0 && a.parent === b.parent) continue; // siblings: one roll for as long as they share a parent
-    if (dhypot(b.x - a.x, b.y - a.y) - naturalRadius(s, a) - naturalRadius(s, b) > DYNAMICS.apartMargin[a.tier]) s.contacts.delete(key);
+    if (dhypot(b.x - a.x, b.y - a.y) - naturalRadius(s, a) - naturalRadius(s, b) > apartOf(a, b)) s.contacts.delete(key);
   }
 
   // 0b. lock & key inside wholes: unbound lock-pair members pair up (one roll per sibling pair, takes effect at once)
   for (let t = 0; t < 2; t++) if (lockOn(s.config, t)) for (const p of byTier[t + 1]) pairWithin(s, p);
 
-  // 0c. encounters, every level, same level only. Two things that come within range (gap < rangeMargin), also while
-  // one is dragged, roll once for each rule that applies to them: lock & key if both are free and unbound lock-pair
-  // types, catalysis if one is the other's catalyst. Ascending id order, so replays roll identically.
+  // 0c. encounters. Two things that come within range (gap < rangeMargin), also while one is dragged, roll once for
+  // each rule that applies to them: lock & key if both are free and unbound lock-pair types, catalysis if one is the
+  // other's catalyst. The chance is that of their size pair (chanceOf). Same-size pairs first, every level; then
+  // different-size pairs of free-standing things. Ascending id order, so replays roll identically.
   const gapOf = (a: Entity, b: Entity) => dhypot(b.x - a.x, b.y - a.y) - rad[a.id] - rad[b.id];
   for (let t = 0; t < 3; t++) {
     const lockHere = lockOn(s.config, t);
@@ -1250,6 +1326,33 @@ function advance(s: WorldState, events: SimEvent[]): void {
       }
     }
   }
+  const lockX = hier && crossOn(s.config, 'lock');
+  const catX = hier && crossOn(s.config, 'catalysis');
+  if (lockX || catX) {
+    const tops = ents.filter((e) => on(e) && e.parent < 0);
+    for (let i = 0; i < tops.length; i++) {
+      const a = tops[i];
+      for (let j = i + 1; j < tops.length; j++) {
+        const b = tops[j];
+        if (a.tier === b.tier) continue;
+        const pLock = lockX && a.bond < 0 && b.bond < 0 && isLockPair(a.type, b.type) ? chanceOf(s.config, 'lock', a.tier, b.tier) : 0;
+        const pCat = catX && (catalyses(a.type, b.type) || catalyses(b.type, a.type)) ? chanceOf(s.config, 'catalysis', a.tier, b.tier) : 0;
+        if (pLock <= 0 && pCat <= 0) continue;
+        const key = pairKey(a.id, b.id);
+        if (s.contacts.has(key) || gapOf(a, b) >= rangeOf(a, b)) continue;
+        const enc: Encounter = { rules: 0, ok: 0, done: 0, tick: s.tick };
+        if (pLock > 0) {
+          enc.rules |= RULE_LOCK;
+          if (rand(s.rng) < pLock) enc.ok |= RULE_LOCK;
+        }
+        if (pCat > 0) {
+          enc.rules |= RULE_CAT;
+          if (rand(s.rng) < pCat) enc.ok |= RULE_CAT;
+        }
+        s.contacts.set(key, enc);
+      }
+    }
+  }
 
   // 0d. after the reveal, results take effect. Lock & key: if they are still near, free and unbound, they bind and
   // the partner snaps to touching (a dragged one's partner then follows the drag). Catalysis: the target spins for as
@@ -1260,14 +1363,13 @@ function advance(s: WorldState, events: SimEvent[]): void {
     const b = ents[key % PAIR_KEY];
     if (!on(a) || !on(b)) continue;
     const t = a.tier;
-    const near = gapOf(a, b) < DYNAMICS.rangeMargin[t];
+    const near = gapOf(a, b) < rangeOf(a, b);
     const due = s.tick - enc.tick >= DYNAMICS.revealTicks;
     if (due && enc.rules & RULE_LOCK && !(enc.done & RULE_LOCK)) {
       enc.done |= RULE_LOCK;
       const bound = (enc.ok & RULE_LOCK) !== 0 && near && a.parent < 0 && b.parent < 0 && a.bond < 0 && b.bond < 0;
       if (bound) {
-        a.bond = b.id;
-        b.bond = a.id;
+        bind(s, a, b);
         // snap together: move the one not held by the pointer so they touch
         const [still, mover] = held[b.id] && !held[a.id] ? [b, a] : [a, b];
         const dx = mover.x - still.x;
@@ -1278,11 +1380,11 @@ function advance(s: WorldState, events: SimEvent[]): void {
         mover.vx = still.vx;
         mover.vy = still.vy;
       }
-      events.push({ kind: 'encounter', rule: 'lock', tier: t as Tier, a: a.id, b: b.id, ok: bound });
+      events.push({ kind: 'encounter', rule: 'lock', tier: t as Tier, tierB: b.tier, a: a.id, b: b.id, ok: bound });
     }
     if (due && enc.rules & RULE_CAT && !(enc.done & RULE_CAT)) {
       enc.done |= RULE_CAT;
-      events.push({ kind: 'encounter', rule: 'catalysis', tier: t as Tier, a: a.id, b: b.id, ok: (enc.ok & RULE_CAT) !== 0 && near });
+      events.push({ kind: 'encounter', rule: 'catalysis', tier: t as Tier, tierB: b.tier, a: a.id, b: b.id, ok: (enc.ok & RULE_CAT) !== 0 && near });
     }
     if (enc.done & RULE_CAT && enc.ok & RULE_CAT && near) {
       if (catalyses(a.type, b.type)) catTouched[b.id] = 1;
@@ -1490,8 +1592,9 @@ function advance(s: WorldState, events: SimEvent[]): void {
     const dy = b.y - a.y;
     const d = dhypot(dx, dy) || 1e-6;
     const ext = d - (rad[a.id] + rad[b.id]);
-    const k = DYNAMICS.bondK[a.tier];
-    const c = DYNAMICS.bondC[a.tier];
+    // across sizes: the larger thing's (softer) spring
+    const k = DYNAMICS.bondK[Math.max(a.tier, b.tier)];
+    const c = DYNAMICS.bondC[Math.max(a.tier, b.tier)];
     const Fx = k * ext * (dx / d) + c * (b.vx - a.vx);
     const Fy = k * ext * (dy / d) + c * (b.vy - a.vy);
     fx[a.id] += Fx;
@@ -1561,8 +1664,9 @@ function advance(s: WorldState, events: SimEvent[]): void {
     if (drift && e.tier === 2) e.angle += s.laws.spin2[e.type] * P.dt;
   }
 
-  // 7. light goal: organism health, plus the size band of organisms and herds
-  if (hier) {
+  // 7. light goal: organism health, plus the size band of organisms and herds.
+  // compose=false: composites never drain or fall apart (that would show what they are made of).
+  if (hier && s.config.compose !== false) {
     for (const o of byTier[1]) {
       if (!o.alive) continue;
       const ex = o.hormone - P.hormoneThr;
@@ -1578,7 +1682,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
       h.health = Math.min(1, Math.max(0, h.health + (out ? -DYNAMICS.sizeDecay : P.healthRecover) * P.dt));
       if (h.health <= 0) dissolveHerd(s, h, events);
     }
-  } else {
+  } else if (!hier) {
     // region "stress" = crowding: cells inside relative to the count expected from uniform spread
     const expected = Math.max(1, (byTier[0].length * Math.PI * P.regionR * P.regionR) / (P.worldW * P.worldH));
     s.regions.forEach((r, i) => {

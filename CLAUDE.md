@@ -15,12 +15,12 @@ group what they saw and write rules about it. The study asks whether, and how, p
 Phases (Explore + Report in one jsPsych trial, then one trial per generalisation task):
 1. **Explore:** 6 min, or 60 s with `short=1`. The instructions never mention levels.
 2. **Report:** three steps in a fixed order, with no going back. An open description; fill-in-the-blank rules built from
-   picture tokens (no level names, the word used is "scale"), after a worked example; then an open "how would you
+   picture tokens (no level names, the word used is "scale"), after a format-only worked example ("5 × ? make up ?"); then an open "how would you
    organise it" question. The text is in `REPORT` in `src/ui/report.ts`. A notepad is available throughout. Avoid priming:
    never name levels or reveal mechanisms in participant-facing text.
 3. **Generalisation:** two 1-minute tasks in a fresh empty world (same seed). Participants drop elements in from a picture
-   palette and try to make an effect happen: "make two things stick together" (success = cell lock & key) and "make
-   something start spinning" (success = organism catalysis). Settings and text are in `GEN` in
+   palette and try to make an effect happen: "make two things stick together" (success = any lock & key, any sizes) and "make
+   something start spinning" (success = any catalysis, any sizes). Settings and text are in `GEN` in
    `src/experiment/generalisation.ts`. Each task is its own `Session`. The data file is the main log plus
    `generalisation: [taskLog, taskLog]`, and every log replays on its own.
 
@@ -31,9 +31,10 @@ Everything participants do is logged, and the world is **deterministic**, so any
 | param | conditions |
 |---|---|
 | `hier` | hierarchy vs flat |
-| `size` | size tracks level vs size is irrelevant |
-| `chance` | graded / uniform / no within-level interactions |
-| `laws` | seed-drawn forces vs random walk |
+| `composition` | `yes`: parts visible and usable (combine, join, pull apart) vs `no`: same world, parts never shown or usable, nothing falls apart (sim: `compose`) |
+| `chance` | skew: graded / uniform / no interactions |
+| `cross` | who interacts, w in [0, 1]: same size only (0) … every size pair (½) … different sizes only (1); drawn from the seed unless set |
+| `movement` | `random` walk (default) vs seed-drawn `laws` (sim: `laws`) |
 
 Keep conditions comparable: a change meant for one condition must not silently alter another.
 
@@ -44,11 +45,14 @@ Keep conditions comparable: a change meant for one condition must not silently a
   circle, triangle, square, star. Organisms and herds are plain colour.
 - **Composition** (what makes up what) is set in `COMPOSITION` in `src/sim/world.ts`. The default is `'same'`: a colour is made only
   of its own colour. Size bands (`org`, `herd`) make composites drain and fall apart outside `[min, unstable)`.
-- **Within-level mechanisms** (`DYNAMICS`, `PAIR_RULES`) only ever act between two things of the **same** level:
+- **Mechanisms** (`DYNAMICS`, `PAIR_RULES`). Lock & key and catalysis act between any two sizes with the size-pair
+  chance `chanceOf` (README "Size-pair chances"); different sizes only between free-standing things. Similarity and laws
+  act within a level only:
   - **lock & key:** purple + green bind;
   - **catalysis:** light blue makes red spin;
   - **similarity** (optional);
   - **laws:** seed-drawn attract/repel matrices.
+- **Every lock & key bond lets go after `bondTicks` (12 s)** when `cross` is set; logs without `cross` keep permanent bonds.
 - **Lock & key and catalysis fire by chance, once per encounter.** An encounter starts when two things come within
   `rangeMargin`, and they must move beyond `apartMargin` before they can roll again. A link line shows the roll for
   `revealTicks`, then it stays (bound), fades (spin) or breaks (failed).

@@ -24,14 +24,13 @@ export const GEN = {
   success: 'Done! You made it happen. Press Continue when you are ready.',
   outOfSpawns: 'You have used all the things you can add.',
   tasks: {
-    // target: the mechanism (rule) and level (tier: 0 cells, 1 organisms, 2 herds) that counts as success
-    lock: { prompt: 'Make two things stick together.', target: { rule: 'lock', tier: 0 } },
-    catalysis: { prompt: 'Make something start spinning.', target: { rule: 'catalysis', tier: 1 } },
-  } as Record<TaskKey, { prompt: string; target: { rule: 'lock' | 'catalysis'; tier: number } }>,
+    // target: the mechanism (rule) that counts as success when it takes effect between any two things, at any sizes
+    lock: { prompt: 'Make two things stick together.', target: { rule: 'lock' } },
+    catalysis: { prompt: 'Make something start spinning.', target: { rule: 'catalysis' } },
+  } as Record<TaskKey, { prompt: string; target: { rule: 'lock' | 'catalysis' } }>,
 };
 
-/** Did this sim event achieve the task: its target mechanism took effect at its target level? */
-export function isTaskSuccess(task: TaskKey, e: SimEvent): boolean {
-  const { rule, tier } = GEN.tasks[task].target;
-  return e.kind === 'encounter' && e.ok && e.rule === rule && e.tier === tier;
+/** Did this sim event achieve the task: its target mechanism took effect (between things of any sizes)? */
+export function isTaskSuccess(task: TaskKey, e: SimEvent): e is Extract<SimEvent, { kind: 'encounter' }> {
+  return e.kind === 'encounter' && e.ok && e.rule === GEN.tasks[task].target.rule;
 }

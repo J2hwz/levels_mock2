@@ -1,8 +1,7 @@
 // Pixi drawing. Reads the world + display layout; never mutates the world.
 
 import { Application, Container, Graphics, Text } from 'pixi.js';
-import type { SizeMode } from '../config';
-import { type Entity, P, type WorldState, catalysisOn, descendants, DYNAMICS, PAIR_KEY, RULE_CAT, RULE_LOCK } from '../sim/world';
+import { type Entity, P, type WorldState, catalysisAnyOn, descendants, DYNAMICS, PAIR_KEY, RULE_CAT, RULE_LOCK } from '../sim/world';
 import { Camera } from './camera';
 import { type Layout, openRoots } from './layout';
 import { type Glyph, type SkinDef, lerpColor } from './skins';
@@ -11,9 +10,11 @@ export interface ViewState {
   selected: number;
   hovered: number;
   debug: boolean;
-  size: SizeMode;
-  /** composites closed (solid colour) unless hovered / selected / isolated */
-  reveal: boolean;
+  /**
+   * What participants see inside organisms and herds: 'hover' = solid colour unless hovered / selected / isolated,
+   * 'always' = contents always drawn, 'never' = always solid colour, no health bars (composition=no)
+   */
+  contents: 'hover' | 'always' | 'never';
   skin: SkinDef;
   /** render-only clock in seconds, for cosmetic wobble */
   time: number;
@@ -74,7 +75,8 @@ export class Renderer {
 
     // reveal: a top-level composite is closed (drawn as its colour only) unless something in it is
     // hovered, selected or isolated; everything inside a closed one is hidden
-    const open = v.reveal ? openRoots(s, [v.hovered, v.selected, s.isolated]) : null;
+    const open = v.contents === 'hover' ? openRoots(s, [v.hovered, v.selected, s.isolated]) : v.contents === 'never' ? new Set<number>() : null;
+    const bars = v.contents !== 'never';
     const rootOf = (e: Entity) => {
       let r = e;
       while (r.parent >= 0) r = s.entities[r.parent];
@@ -104,7 +106,7 @@ export class Renderer {
       this.gRegion.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2 * px, color: sk.ui, alpha: 0.5 * dim(e) });
     }
     // catalysis turns things: show the orientation of organisms and herds at levels where it is on
-    const spinMark = (t: number) => catalysisOn(s.config, t);
+    const spinMark = (t: number) => catalysisAnyOn(s.config, t);
 
     for (const e of s.entities) {
       if (!e.alive) continue;
@@ -115,14 +117,9 @@ export class Renderer {
       if (e.tier === 2) {
         const col = sk.herd[e.type];
         this.gHerd.circle(n.x, n.y, n.r).fill({ color: col, alpha: (shut ? CLOSED_ALPHA : sk.herdFill) * a });
-        if (v.size === 'irrelevant') {
-          dashedCircle(this.gHerd, n.x, n.y, n.r, Math.max(10, Math.round(n.r / (6 * px))));
-          this.gHerd.stroke({ width: 1.5 * px, color: col, alpha: Math.min(1, sk.herdStroke * 2) * a });
-        } else {
-          this.gHerd.circle(n.x, n.y, n.r).stroke({ width: 1.5 * px, color: col, alpha: sk.herdStroke * a });
-        }
+        this.gHerd.circle(n.x, n.y, n.r).stroke({ width: 1.5 * px, color: col, alpha: sk.herdStroke * a });
         if (spinMark(2)) rimMark(this.gHerd, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.06, 3 * px), col, a);
-        if (e.health < 1) this.healthBar(this.gHerd, n.x, n.y - n.r - 6 * px, Math.max(n.r * 0.6, 20 * px), e.health, sk, a);
+        if (bars && e.health < 1) this.healthBar(this.gHerd, n.x, n.y - n.r - 6 * px, Math.max(n.r * 0.6, 20 * px), e.health, sk, a);
       } else if (e.tier === 1) {
         const col = sk.species[e.type];
         blob(this.gOrg, n.x, n.y, n.r, sk.wobble, v.time * 1.3 + e.id, e.angle);
@@ -131,7 +128,7 @@ export class Renderer {
         this.gOrg.stroke({ width: Math.max(1.5 * px, n.r * 0.08), color: col, alpha: sk.membraneStroke * a });
         if (spinMark(1)) rimMark(this.gOrg, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.12, 1.5 * px), col, a);
         const w = Math.max(n.r * 1.3, 14 * px);
-        this.healthBar(this.gOrg, n.x, n.y - n.r - w * 0.15 - 2 * px, w, e.health, sk, a);
+        if (bars) this.healthBar(this.gOrg, n.x, n.y - n.r - w * 0.15 - 2 * px, w, e.health, sk, a);
       } else {
         // stress: the cell darkens and flickers (red is an element colour, so no red tint)
         const stressT = Math.min(1, e.signal / 0.6);
@@ -317,14 +314,4 @@ function glyph(g: Graphics, kind: Glyph, x: number, y: number, r: number, angle 
     pts.push(x + rr * Math.cos(th), y + rr * Math.sin(th));
   }
   g.poly(pts, true);
-}
-
-function dashedCircle(g: Graphics, x: number, y: number, r: number, segments: number): void {
-  const n = segments * 2;
-  for (let i = 0; i < n; i += 2) {
-    const a0 = (2 * Math.PI * i) / n;
-    const a1 = (2 * Math.PI * (i + 1)) / n;
-    g.moveTo(x + r * Math.cos(a0), y + r * Math.sin(a0));
-    g.arc(x, y, r, a0, a1);
-  }
 }
