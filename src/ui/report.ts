@@ -1,7 +1,8 @@
 // Report phase (after Explore): three steps in a fixed order, no going back, so earlier answers are not primed by
 // later ones.
 //   1. an open description of the world (nothing structured shown yet)
-//   2. fill-in-the-blank rules: picture tokens of every element (no level names) dragged into sentence blanks,
+//   2. fill-in-the-blank rules: picture tokens of every element (no level names, in a random order per participant,
+//      so the layout groups nothing by size or colour) dragged into sentence blanks,
 //      outcomes in free text, after one worked example that shows the format only ("5 × ? make up ?"), so it states
 //      no fact about the world and is identical in every condition
 //   3. an open question on how they would organise the world
@@ -33,7 +34,7 @@ export const REPORT = {
       question: 'If you had to sort everything in this world into groups, how would you do it? Explain your groups.',
     },
   ],
-  palette: 'Things in this world, at each scale',
+  palette: 'Things in this world',
   example: 'For example (with your own pictures in the blanks):',
   /** the number in the worked example; the pictures are always grey "?" placeholders */
   exampleN: 5,
@@ -71,10 +72,12 @@ export class ReportPanel {
   private picked: Token | null = null;
   private readonly stepEls: HTMLElement[];
   private readonly ruleList = h('div', { class: 'report-rules' });
-  private readonly palette = h('div', { class: 'palette' });
+  private readonly palette = h('div', { class: 'palette grid' });
 
   constructor(
     private readonly look: TokenLook,
+    /** the palette's tokens in display order (random, see shuffledTokens) */
+    private readonly order: readonly Token[],
     private readonly onEvent: (e: ReportEvent) => void,
   ) {
     this.stepEls = [this.openStep(0, 'describe'), this.rulesStep(), this.openStep(2, 'organise')];
@@ -114,12 +117,8 @@ export class ReportPanel {
 
   private rulesStep(): HTMLElement {
     const s = REPORT.steps[1] as { title: string; intro: string };
-    // palette: one row per scale, small to large, no labels
-    for (let tier = 0; tier < 3; tier++) {
-      const row = h('div', { class: 'palette-row' });
-      for (let type = 0; type < 4; type++) row.append(this.paletteToken({ tier, type }));
-      this.palette.append(row);
-    }
+    // palette: every element in the given (random) order, 4 to a row, no labels
+    for (const t of this.order) this.palette.append(this.paletteToken(t));
     const placeholder = () => h('span', { class: 'blank placeholder', 'aria-label': 'a picture' }, '?');
     const exampleLine = h('div', { class: 'rule-line example' },
       h('span', { class: 'n' }, String(REPORT.exampleN)), '×', placeholder(), REPORT.makeup.makeUp, placeholder());

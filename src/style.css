@@ -311,10 +311,13 @@
   background: var(--panel-2);
   border-radius: 6px;
 }
-.report .palette-row {
-  display: flex;
-  gap: 8px;
+.report .palette.grid {
+  /* elements in a random order, 4 to a row: the layout groups nothing by size or colour */
+  display: grid;
+  grid-template-columns: repeat(4, max-content);
+  gap: 4px 8px;
   align-items: center;
+  justify-items: center;
 }
 .report .token {
   display: inline-flex;

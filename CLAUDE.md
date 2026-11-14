@@ -15,7 +15,7 @@ group what they saw and write rules about it. The study asks whether, and how, p
 Phases (Explore + Report in one jsPsych trial, then one trial per generalisation task):
 1. **Explore:** 6 min, or 60 s with `short=1`. The instructions never mention levels.
 2. **Report:** three steps in a fixed order, with no going back. An open description; fill-in-the-blank rules built from
-   picture tokens (no level names, the word used is "scale"), after a format-only worked example ("5 × ? make up ?"); then an open "how would you
+   picture tokens (no level names, the word used is "scale"; a random order per palette, logged as `palette_order`), after a format-only worked example ("5 × ? make up ?"); then an open "how would you
    organise it" question. The text is in `REPORT` in `src/ui/report.ts`. A notepad is available throughout. Avoid priming:
    never name levels or reveal mechanisms in participant-facing text.
 3. **Generalisation:** two 1-minute tasks in a fresh empty world (same seed). Participants drop elements in from a picture

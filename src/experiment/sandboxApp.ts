@@ -15,7 +15,7 @@ import { ControlsLegend, InspectPanel, type InspectInfo, PhaseBanner, TimeContro
 import { h } from '../ui/dom';
 import { Notepad } from '../ui/notepad';
 import { REPORT, ReportPanel } from '../ui/report';
-import { type Token, parseKey, tokenKey, tokenName, tokenSvg } from '../ui/tokens';
+import { PALETTE_SALT, parseKey, shuffledTokens, tokenKey, tokenName, tokenSvg } from '../ui/tokens';
 import { GEN, type TaskKey, isTaskSuccess } from './generalisation';
 import { saveBackup as saveMainBackup } from './storage';
 
@@ -126,11 +126,15 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   };
 
   // ---- report (phase 2): its worked example is a format-only placeholder, the same in every condition
+  // each palette shows the elements in its own random order, drawn from the seed and logged
+  const reportOrder = shuffledTokens(cfg.seed, PALETTE_SALT.report, 3);
+  if (!task) session.log('palette_order', { where: 'report', order: reportOrder.map(tokenKey) });
   const report = new ReportPanel(
     {
       colours: [skin.cell.map(hex), skin.species.map(hex), skin.herd.map(hex)],
       shapes: skin.wobble > 0 ? skin.nucleus : skin.glyph,
     },
+    reportOrder,
     (e) => {
       session.log('report', e);
       if (e.op === 'step') showReportStep();
@@ -142,17 +146,16 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   let spawns = 0;
   let success: { tick: number; tiers: [number, number] } | null = null;
   const taskStatus = h('p', { class: 'task-status', id: 'task-status' });
-  const taskPalette = h('div', { class: 'palette' });
-  for (let tier = 0; tier < (cfg.hier ? 3 : 1); tier++) {
-    const row = h('div', { class: 'palette-row' });
-    for (let type = 0; type < 4; type++) {
-      const t: Token = { tier, type };
+  const taskPalette = h('div', { class: 'palette grid' });
+  if (task) {
+    const order = shuffledTokens(cfg.seed, PALETTE_SALT[task], cfg.hier ? 3 : 1);
+    session.log('palette_order', { where: task, order: order.map(tokenKey) });
+    for (const t of order) {
       const el = h('span', { class: 'token pick', draggable: 'true', title: tokenName(t), 'data-token': tokenKey(t) });
       el.innerHTML = tokenSvg(t, look);
       el.addEventListener('dragstart', (e) => e.dataTransfer?.setData('text/plain', tokenKey(t)));
-      row.append(el);
+      taskPalette.append(el);
     }
-    taskPalette.append(row);
   }
   const taskPanel = h('section', { class: 'panel report task' }, h('h3', {}, GEN.palette), taskPalette, taskStatus);
   if (task) {

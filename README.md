@@ -250,7 +250,8 @@ Tier names appear only with `debug=1`.
    1. *Describe the world* (open): "Suppose you are describing this world to another player who has never seen it.
       What would you tell them?" Nothing else is shown yet.
    2. *Rules* (fill in the blanks): a palette of picture tokens of all 12 elements (4 colours × 3 sizes, drawn as in the
-      world, grouped by size, no names; the only word used for levels is "scale"). Participants drag a token into a
+      world, no names, in a **random order** drawn from the seed and laid out 4 to a row, so nothing is grouped by size or
+      colour; the only word used for levels is "scale"). Participants drag a token into a
       blank (or click a token, then a blank; click a filled blank to empty it) and add as many rules as they like:
       - "When [ ] is near [ ], ______" (outcome in free text, so nothing about binding or spinning is suggested);
       - "[n] × [ ] make up [ ]";
@@ -266,7 +267,7 @@ Tier names appear only with `debug=1`.
 
 3. **Generalisation**: after the Report (so its prompts can't prime the report), an intro page and two tasks of
    1 minute each. Each task is a **fresh, empty world** with the same seed, so it has the same laws and recipes as the
-   exploration world, and participants drag elements into it from a palette of all 12 pictures (the report's pictures;
+   exploration world, and participants drag elements into it from a palette of all 12 pictures (the report's pictures, each task in its own random order;
    only cells in the flat condition). A dropped larger thing arrives already made of its recipe-0 parts. The prompt
    describes only the effect:
    - **Task 1:** "Make two things stick together." Success = any two things bind by lock & key, at any sizes.
@@ -356,6 +357,7 @@ Task logs have the same event types, plus `task_success {task, tick, tiers}`, `t
 | `encounter` | `{rule: "lock"\|"catalysis", tier, tierB, a, b, ok}` (`tier`/`tierB`: the levels of `a`/`b`; different for a cross-size pair): a roll took effect after its reveal; `ok` = they bound / the target started spinning (false if the roll failed or they left range in time) |
 | `region_depleted`, `swapped` | sim events |
 | `phase` | `{from, to, index}` |
+| `palette_order` | `{where: "report"\|"lock"\|"catalysis", order}`: the palette's pictures in display order, as token keys `"tier:type"` (random per palette, from the seed and `PALETTE_SALT` in `src/ui/tokens.ts`); logged when the palette is built |
 | `report` | `step{step}` (0 describe, 1 rules, 2 organise); `answer{q: "describe"\|"organise", from, to}`; `rule_add{id, kind: "interaction"\|"makeup"\|"other"}`; `rule_set{id, field, from, to}`; `rule_delete{id, rule}`. Tokens are `{tier, type}` (level and colour) |
 | `notepad` | `{text, reason: "pause"\|"hide"\|"end"}`: the full notepad text, when typing paused for 2 s, when it was hidden, or at the end (only if it changed since the last report) |
 | `notepad_toggle` | `{open}` when the notepad is shown/hidden |

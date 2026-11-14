@@ -1,6 +1,8 @@
 // Picture tokens of the 12 elements (4 colours x 3 sizes), drawn as in the world but with no level names.
 // Shared by the report (fill-in-the-blank rules) and the generalisation tasks (palette to drop things into the world).
 
+import { makeRng, randInt } from '../sim/rng';
+
 /** An element, as the analysis sees it: level (tier) and colour (type). */
 export interface Token {
   tier: number;
@@ -22,6 +24,27 @@ export const parseKey = (k: string): Token | null => {
   const m = /^(\d):(\d)$/.exec(k);
   return m ? { tier: Number(m[1]), type: Number(m[2]) } : null;
 };
+
+/**
+ * Salts for the palette orders: each palette gets its own random order, drawn from the participant's seed, so it is
+ * reproducible and differs between the report and each task.
+ */
+export const PALETTE_SALT = { report: 1, lock: 2, catalysis: 3 } as const;
+
+/**
+ * All elements of the first `tiers` levels (4 colours each) in a random order (Fisher-Yates), drawn from the seed and
+ * a salt: no grouping by size or colour.
+ */
+export function shuffledTokens(seed: number, salt: number, tiers: number): Token[] {
+  const out: Token[] = [];
+  for (let tier = 0; tier < tiers; tier++) for (let type = 0; type < TOKEN_WORDS.colour.length; type++) out.push({ tier, type });
+  const r = makeRng((Math.imul(seed | 0, 0x9e3779b1) ^ Math.imul(salt + 0x51ed, 0x85ebca77)) >>> 0);
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = randInt(r, 0, i);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
 
 export interface TokenLook {
   /** css colours per tier [cells, organisms, herds], indexed by type */
