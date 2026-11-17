@@ -29,7 +29,7 @@ export const parseKey = (k: string): Token | null => {
  * Salts for the palette orders: each palette gets its own random order, drawn from the participant's seed, so it is
  * reproducible and differs between the report and each task.
  */
-export const PALETTE_SALT = { report: 1, lock: 2, catalysis: 3 } as const;
+export const PALETTE_SALT = { report: 1, lock: 2, catalysis: 3, explore: 4 } as const;
 
 /**
  * All elements of the first `tiers` levels (4 colours each) in a random order (Fisher-Yates), drawn from the seed and

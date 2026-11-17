@@ -53,6 +53,7 @@ export function run(cfg: Config): JsPsych {
       `<div class="prose"><h2>Doing things</h2>
         <ul>
           <li><b>Drag</b> a selected thing to move it.</li>
+          <li><b>Drag a picture</b> from the strip at the bottom onto the world to add that thing. <b>Delete</b> removes the selected thing.</li>
           ${comp
             ? `<li><b>Shift + drag</b> a selected thing to pull it out of whatever it is in (anything stuck to it comes too), or off whatever it is stuck to.</li>
           <li>Dropping things next to each other just lets them meet. To <b>combine</b> things, press <b>C</b> while you are still dragging:

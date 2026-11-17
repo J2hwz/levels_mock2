@@ -79,6 +79,8 @@ export class ControlsLegend {
           ? this.sticks ? [row(['Shift', 'Drag'], 'pull it off what it is stuck to')] : []
           : [row(['Shift', 'Drag'], this.sticks ? 'pull it out of what it is in (what is stuck to it comes too), or off what it is stuck to' : 'pull it out of what it is in')]),
         ...(this.compose ? [row(['Drag', 'C'], 'combine it with whatever it is touching')] : []),
+        row(['Drag a picture'], 'add it to the world'),
+        row(['Delete'], 'remove the selected thing'),
         row(['Scroll'], 'zoom'),
         row(['Drag background'], 'move around'),
         ...(this.debug ? [row(['S'], 'swap realisation (debug)')] : []),

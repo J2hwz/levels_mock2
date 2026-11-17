@@ -49,6 +49,10 @@ export function scriptedActions(session: Session): Map<number, Action[]> {
   const trio = freeCells.filter((e) => e !== free && e !== pair[0] && e !== pair[1] && e.bond < 0).slice(0, 3);
   if (trio.length === 3) at(74, { kind: 'combine', ids: trio.map((e) => e.id) });
   if (lones.length >= 2) at(72, { kind: 'combine', ids: [lones[0].id, lones[1].id] });
+  // delete a loose cell and a lone organism (with its cells); harmless if already gone
+  const gone = freeCells.find((e) => e !== free && e !== pair[0] && e !== pair[1] && !trio.includes(e));
+  if (gone) at(100, { kind: 'remove', id: gone.id });
+  if (lones.length >= 3) at(110, { kind: 'remove', id: lones[2].id });
   at(130, { kind: 'swap', id: org.id });
   at(150, { kind: 'swap', id: herd.id });
   return m;

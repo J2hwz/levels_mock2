@@ -1770,3 +1770,103 @@ describe('catalysis acts only within one scope (parts of the same whole, or free
       },
     ));
 });
+
+// ---------------------------------------------------------------- participants delete things (remove action)
+
+describe('remove (Delete key): the selected thing and everything inside it', () => {
+  const world = (compose = true) => createWorld({ hier: true, eps: 0.05, seed: 42, move: false, compose, dyn: { lock: true, catalysis: false, similar: OFF } });
+  const removedEv = (evs: SimEvent[]) => evs.find((e) => e.kind === 'removed') as Extract<SimEvent, { kind: 'removed' }> | undefined;
+
+  it('a loose cell goes; its bond partner is let go; a drag on it ends', () => {
+    const s = world();
+    const [a, b] = meetPair(s, 0, PURPLE, GREEN, 0);
+    withSettings(() => (DYNAMICS.lockChance = ALWAYS), () => ticks(s, REVEAL));
+    expect(a.bond).toBe(b.id);
+    applyAction(s, { kind: 'dragStart', id: a.id, x: a.x, y: a.y });
+    const evs = applyAction(s, { kind: 'remove', id: a.id });
+    expect(a.alive).toBe(false);
+    expect(b.alive).toBe(true);
+    expect(b.bond).toBe(-1);
+    expect(s.drag).toBeNull();
+    expect(removedEv(evs)).toEqual({ kind: 'removed', id: a.id, tier: 0, ids: [a.id] });
+    ticks(s, 5);
+  });
+
+  it('an organism goes with all its cells; its herd keeps the other members', () => {
+    const s = world();
+    const herd = s.entities.find((e) => e.alive && e.tier === 2)!;
+    const n = herd.children.length;
+    const org = s.entities[herd.children[0]];
+    const cells = org.children.slice();
+    const evs = applyAction(s, { kind: 'remove', id: org.id });
+    expect(org.alive).toBe(false);
+    expect(cells.every((c) => !s.entities[c].alive)).toBe(true);
+    expect(herd.alive).toBe(true);
+    expect(herd.children).toHaveLength(n - 1);
+    expect(herd.children).not.toContain(org.id);
+    expect(removedEv(evs)!.ids.sort((x, y) => x - y)).toEqual([org.id, ...cells].sort((x, y) => x - y));
+    ticks(s, 5);
+  });
+
+  it('a herd goes with its organisms and their cells', () => {
+    const s = world();
+    const herd = s.entities.find((e) => e.alive && e.tier === 2)!;
+    const inside = herd.children.flatMap((o) => [o, ...s.entities[o].children]);
+    const evs = applyAction(s, { kind: 'remove', id: herd.id });
+    expect(herd.alive).toBe(false);
+    expect(inside.every((id) => !s.entities[id].alive)).toBe(true);
+    expect(removedEv(evs)!.ids).toHaveLength(1 + inside.length);
+    const before = s.entities.filter((e) => e.alive).length;
+    ticks(s, 30);
+    expect(s.entities.filter((e) => e.alive).length).toBe(before); // nothing else falls apart
+  });
+
+  it('a part goes on its own (composition=yes): its whole keeps the rest; the last part takes the empty whole with it', () => {
+    const s = world();
+    const org = s.entities.find((e) => e.alive && e.tier === 1 && e.parent < 0)!;
+    const [c0, ...rest] = org.children.slice();
+    applyAction(s, { kind: 'remove', id: c0 });
+    expect(s.entities[c0].alive).toBe(false);
+    expect(org.alive).toBe(true);
+    expect(org.children).toEqual(rest);
+    let evs: SimEvent[] = [];
+    for (const c of rest) evs = applyAction(s, { kind: 'remove', id: c });
+    expect(org.alive).toBe(false);
+    expect(evs.some((e) => e.kind === 'organism_death' && e.id === org.id && e.cause === 'empty')).toBe(true);
+  });
+
+  it('composition=no: parts cannot be removed, whole things can', () => {
+    const s = world(false);
+    const org = s.entities.find((e) => e.alive && e.tier === 1 && e.parent < 0)!;
+    const cell = org.children[0];
+    expect(applyAction(s, { kind: 'remove', id: cell })).toEqual([]);
+    expect(s.entities[cell].alive).toBe(true);
+    applyAction(s, { kind: 'remove', id: org.id });
+    expect(org.alive).toBe(false);
+    expect(s.entities[cell].alive).toBe(false);
+  });
+
+  it('removing something already gone, or an invalid id, does nothing', () => {
+    const s = world();
+    const cell = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0)!;
+    applyAction(s, { kind: 'remove', id: cell.id });
+    const h = hashWorld(s);
+    expect(applyAction(s, { kind: 'remove', id: cell.id })).toEqual([]);
+    expect(applyAction(s, { kind: 'remove', id: 99999 })).toEqual([]);
+    expect(hashWorld(s)).toBe(h);
+  });
+
+  it('spawn and remove are logged and replay exactly', () => {
+    const session = testSession('?seed=42');
+    const s = session.state;
+    session.act({ kind: 'spawn', tier: 0, type: 2, x: 1200, y: 800 });
+    for (let i = 0; i < 20; i++) session.tick();
+    session.act({ kind: 'remove', id: s.entities.at(-1)!.id });
+    const herd = s.entities.find((e) => e.alive && e.tier === 2)!;
+    session.act({ kind: 'remove', id: herd.id });
+    for (let i = 0; i < 40; i++) session.tick();
+    session.end();
+    const r = replay(JSON.parse(JSON.stringify(session.logger.toJSON())));
+    expect(r.ok).toBe(true);
+  });
+});

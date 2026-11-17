@@ -51,7 +51,8 @@ for (const [name, q0] of [['hier1_composition_yes', 'hier=1&composition=yes'], [
   const [c, o, h] = await stats(page);
   const file = `${OUT}/${name}.png`;
   await page.screenshot({ path: file });
-  console.log(`${file}: cells=${c} organisms=${o} herds=${h}`);
+  const strip = await page.locator('#add-strip .token').evaluateAll((els) => els.map((e) => e.dataset.token).join(' '));
+  console.log(`${file}: cells=${c} organisms=${o} herds=${h} | add strip: ${strip}`);
   // zoomed view on the first herd (or the centre in flat), with the pointer hovering it: composition=no shows nothing inside
   const centre = await page.evaluate(() => {
     const sb = window.__sandbox;
@@ -419,6 +420,27 @@ for (const hier of [1, 0]) {
   console.log('drop combined two loose cells into', founded);
   await page.waitForTimeout(1000);
   await page.screenshot({ path: `${OUT}/runthrough_1b_combine.png` });
+
+  // add a cell from the strip (composition=yes: cells only), then select it and press Delete
+  const canvasEl = page.locator('canvas.world-canvas');
+  const nBefore = await page.evaluate(() => window.__sandbox.state.entities.length);
+  await page.locator('#add-strip .token').first().dragTo(canvasEl, { targetPosition: { x: 520, y: 600 } });
+  await page.waitForTimeout(300);
+  const added = await page.evaluate((n) => {
+    const s = window.__sandbox.state;
+    return s.entities.slice(n).map((e) => ({ id: e.id, tier: e.tier, type: e.type, alive: e.alive }));
+  }, nBefore);
+  await page.screenshot({ path: `${OUT}/runthrough_1d_add.png` });
+  let deleted = null;
+  if (added.length) {
+    const [ax, ay] = await screenPos(page, added[0].id);
+    await page.mouse.click(ax, ay);
+    await page.waitForTimeout(100);
+    await page.keyboard.press('Delete');
+    await page.waitForTimeout(100);
+    deleted = await page.evaluate((id) => !window.__sandbox.state.entities[id].alive, added[0].id);
+  }
+  console.log('add from strip ->', JSON.stringify(added), '| deleted with Delete key:', deleted);
 
   // wheel zoom, pan; I does nothing any more (no isolation)
   const aliveBeforeI = await page.evaluate(() => window.__sandbox.state.entities.filter((e) => e.alive).length);

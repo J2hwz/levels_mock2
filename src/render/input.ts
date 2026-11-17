@@ -211,6 +211,11 @@ export class InputController {
     const sel = this.host.selected();
     if (e.key === 'Escape') {
       this.host.select(null);
+    } else if ((e.key === 'Delete' || e.key === 'Backspace') && !e.repeat && sel >= 0) {
+      // delete the selected thing (and everything inside it)
+      e.preventDefault();
+      this.host.act({ kind: 'remove', id: sel });
+      this.host.select(null);
     } else if ((e.key === 's' || e.key === 'S') && this.host.debug && sel >= 0) {
       this.host.act({ kind: 'swap', id: sel });
     }

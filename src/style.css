@@ -306,6 +306,7 @@
 }
 .stage.report-mode .world-canvas,
 .stage.report-mode .inspect,
+.stage.report-mode .add-strip,
 .stage.report-mode .legend,
 .stage.report-mode .hud {
   display: none;
@@ -431,4 +432,38 @@
   color: var(--accent);
   font-weight: 600;
   font-size: 15px;
+}
+
+/* Explore: pictures to drag onto the world (bottom centre, clear of the notepad button on the right) */
+.add-strip {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 300px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 6px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  border: 1px solid var(--panel-2);
+  border-radius: 6px;
+}
+.add-strip .muted {
+  margin-right: 4px;
+}
+.add-strip .token {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 34px;
+  cursor: grab;
+  border-radius: 6px;
+}
+.add-strip .token:hover {
+  background: var(--panel);
+  outline: 2px solid var(--accent);
 }

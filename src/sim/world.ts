@@ -339,7 +339,9 @@ export type Action =
   | { kind: 'combine'; ids: number[] }
   | { kind: 'swap'; id: number }
   /** generalisation tasks: drop a new element into the world (a larger one arrives made of its recipe-0 parts) */
-  | { kind: 'spawn'; tier: Tier; type: number; x: number; y: number };
+  | { kind: 'spawn'; tier: Tier; type: number; x: number; y: number }
+  /** participant deletes a thing (Delete key): it and everything inside it. A part leaves its whole, which may drain */
+  | { kind: 'remove'; id: number };
 
 export type SimEvent =
   | { kind: 'organism_death'; id: number; cause: 'health' | 'empty' | 'size'; cells: number[] }
@@ -349,7 +351,9 @@ export type SimEvent =
   | { kind: 'founded'; id: number; tier: Tier; type: number; realisation: number; members: number[] }
   /** a roll's result took effect (after the reveal): ok = they bound / the target started spinning */
   /** tier: a's level, tierB: b's level (the same for a same-size pair) */
-  | { kind: 'encounter'; rule: 'lock' | 'catalysis'; tier: Tier; tierB: Tier; a: number; b: number; ok: boolean };
+  | { kind: 'encounter'; rule: 'lock' | 'catalysis'; tier: Tier; tierB: Tier; a: number; b: number; ok: boolean }
+  /** a participant deleted `id`; ids = every entity removed (it first, then everything inside it) */
+  | { kind: 'removed'; id: number; tier: Tier; ids: number[] };
 
 // ---------------------------------------------------------------- parameters
 
@@ -1246,6 +1250,18 @@ export function applyAction(s: WorldState, a: Action): SimEvent[] {
     case 'spawn':
       spawn(s, a.tier, a.type, a.x, a.y);
       break;
+    case 'remove': {
+      if (!validId(s, a.id)) break;
+      const e = s.entities[a.id];
+      if (e.parent >= 0 && s.config.compose === false) break; // composition=no: parts can't be picked out
+      const inside = descendants(s, a.id);
+      for (const id of inside.slice().reverse()) kill(s, s.entities[id]); // deepest first
+      e.children = [];
+      unparent(s, e, events); // a whole left empty dissolves as usual
+      kill(s, e);
+      events.push({ kind: 'removed', id: e.id, tier: e.tier, ids: [e.id, ...inside] });
+      break;
+    }
     case 'select':
       break; // UI-only; logged but no effect on the world
   }

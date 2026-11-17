@@ -34,7 +34,7 @@ download to the participant's own computer; nothing is sent anywhere.
 | param   | values                    | default    | meaning |
 |---------|---------------------------|------------|---------|
 | `hier`  | `1` \| `0`                | `1`        | hierarchy condition (cells/organisms/herds) vs flat (cells only) |
-| `composition` | `yes` \| `no`     | `yes`      | **condition.** `yes`: organisms and herds show what they are made of on hover, and participants can combine, join and pull things apart; composites drain and fall apart outside their size band. `no`: the same world (same seed, same parts behind the scenes), but parts are never shown or usable: hovering shows only the colour, clicks select only whole things, C, drop-to-join and pulling parts out do nothing, nothing drains or falls apart, no health bars, the inspect panel shows 0 visible parts, and the instructions and Controls box leave out those abilities. Lock & key and catalysis still work between whole things |
+| `composition` | `yes` \| `no`     | `yes`      | **condition.** `yes`: organisms and herds show what they are made of on hover, and participants can combine, join and pull things apart; composites drain and fall apart outside their size band. `no`: the same world (same seed, same parts behind the scenes), but parts are never shown or usable: hovering shows only the colour, clicks select only whole things, C, drop-to-join and pulling parts out do nothing, nothing drains or falls apart, no health bars, the add strip offers every element at every size (they arrive whole) instead of cells only, and the instructions and Controls box leave out those abilities. Lock & key and catalysis still work between whole things |
 | `skin`  | `biology` \| `abstract`   | `biology`  | rendering only; the simulation is identical |
 | `seed`  | integer                   | random     | world seed (the random default is logged in the header) |
 | `eps`   | 0..1                      | `0.05`     | cross-unit leakage |
@@ -252,6 +252,8 @@ similarRepel: [false, true, true],
 | Shift + drag | a member leaves its parent, taking its lock & key partner along (the pair stays attached); a free bound cell is pulled off its partner |
 | drop things together | nothing is built: they just meet (so lock & key and catalysis can be seen) |
 | C while dragging | join the compatible parent it touches, else combine it with every loose same-level thing touching it into a new parent one level up (2+ cells → organism, 2+ organisms → herd, if the grammar allows); the drag continues with the result |
+| drag a picture from the add strip onto the world | add that element there (Explore; `spawn` action). The strip sits at the bottom of the world. composition=yes and the flat world: the 4 cells only, so anything bigger must be built by hand. composition=no: all 12 elements, cells, membranes and hazes (they arrive whole, made of their recipe-0 parts). No limit. The pictures are in a random order from the seed (`palette_order` `where: "explore"`) |
+| Delete (or Backspace) | remove the selected thing and everything inside it (`remove` action). A selected part leaves its whole, which may then drain; the last part takes its empty whole with it. composition=no: only whole things can be selected, so a membrane or haze goes with its hidden parts. Also works in the generalisation tasks (it does not give back a drop) |
 | wheel / drag background | zoom / pan |
 | S (debug only) | `swapRealisation` on the selection |
 
@@ -266,8 +268,8 @@ carries through Explore and Report. It starts closed as a small "✎ notepad" bu
 pauses for 2 s, when it is hidden, and at the end (only if it changed); each show/hide is a `notepad_toggle` event. The
 instruction page mentions it. Code: `src/ui/notepad.ts`.
 
-The inspect panel (bottom left) shows only observable properties: colour, size, speed, number of visible parts.
-Tier names appear only with `debug=1`.
+The inspect panel (bottom left: colour, size, speed, number of visible parts, and id / tier / type / health) is shown
+only with `debug=1`. Participants see only the selection ring.
 
 ## Phases (inside `SandboxPlugin`)
 
@@ -375,7 +377,7 @@ Task logs have the same event types, plus `task_success {task, tick, tiers}`, `t
 | type | payload |
 |---|---|
 | `session_start` | `{hash}` of the generated world |
-| `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids}` (2+, dragged first), `swap{id}`, `spawn{tier, type, x, y}` (generalisation tasks: a dropped element). Coordinates are sim/world units |
+| `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids}` (2+, dragged first), `swap{id}`, `spawn{tier, type, x, y}` (a picture dropped onto the world, in Explore or a generalisation task), `remove{id}` (Delete: the selected thing and everything inside it). Coordinates are sim/world units |
 | `hover` | `{id}` on every hover-target change (`null` = nothing) |
 | `camera` | `{x, y, zoom}` every 250 ms during Explore and the tasks. None during the report: the world is hidden and stopped, so `hash`/`snapshot`/`hover` events also stop, and report events carry the frozen `t_tick`, plus `t_ms` |
 | `hash` | `{hash}` every 30 ticks (1 s of sim time) |
@@ -384,9 +386,10 @@ Task logs have the same event types, plus `task_success {task, tick, tiers}`, `t
 | `founded` | `{id, tier, type, realisation, members}` when a `combine` creates a new organism/herd |
 | `herd_dissolved` | `{id}` when emptied; `{id, cause: "size", organisms}` when it fell apart outside its size band |
 | `encounter` | `{rule: "lock"\|"catalysis", tier, tierB, a, b, ok}` (`tier`/`tierB`: the levels of `a`/`b`; different for a cross-size pair): a roll took effect after its reveal; `ok` = they bound / the target started spinning (false if the roll failed or they left range in time) |
+| `removed` | `{id, tier, ids}` after a `remove` action: `ids` lists every entity removed (`id` first, then everything inside it) |
 | `region_depleted`, `swapped` | sim events |
 | `phase` | `{from, to, index}` |
-| `palette_order` | `{where: "report"\|"lock"\|"catalysis", order}`: the palette's pictures in display order, as token keys `"tier:type"` (random per palette, from the seed and `PALETTE_SALT` in `src/ui/tokens.ts`); logged when the palette is built |
+| `palette_order` | `{where: "report"\|"explore"\|"lock"\|"catalysis", order}`: the palette's pictures in display order, as token keys `"tier:type"` (random per palette, from the seed and `PALETTE_SALT` in `src/ui/tokens.ts`); logged when the palette is built |
 | `report` | `step{step}` (0 describe, 1 rules, 2 organise); `answer{q: "describe"\|"organise", from, to}`; `rule_add{id, kind: "interaction"\|"makeup"\|"other"}`; `rule_set{id, field, from, to}`; `rule_delete{id, rule}`. Tokens are `{tier, type}` (level and colour) |
 | `notepad` | `{text, reason: "pause"\|"hide"\|"end"}`: the full notepad text, when typing paused for 2 s, when it was hidden, or at the end (only if it changed since the last report) |
 | `notepad_toggle` | `{open}` when the notepad is shown/hidden; one `{open: true}` when the report starts, as the notepad is opened for them |
@@ -524,7 +527,7 @@ free-standing ancestor's outline. Same-level collision is unchanged.
 **Interaction and UI**
 - Selection: the first click selects the deepest hit (lowest tier, nearest centre). Clicking the same spot again climbs to the parent; past the top it wraps back to the deepest. Clicking empty space clears the selection.
 - A click becomes a drag after 4 px of movement. Dragging starts only if the pointer went down on the selection or one of its parts; otherwise the drag pans.
-- Inspect panel "size" is the on-screen radius in world units; "speed" is world units per second.
+- Inspect panel (debug only) "size" is the on-screen radius in world units; "speed" is world units per second.
 - Report text edits are logged on `change` (blur / Enter), not per keystroke. The notepad is logged when typing pauses for 2 s, when it is hidden, and at the end.
 - Report is untimed (Next / Finish buttons). Explore uses wall-clock time and keeps counting while paused.
 - Hash every 1 s and snapshots every 10 s are in **sim time** (ticks), so pausing does not create redundant snapshots.

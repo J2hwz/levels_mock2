@@ -1,6 +1,6 @@
 // Mounts the sandbox (Pixi stage + HTML panels), runs the fixed-tick loop and the phases, and resolves when the
 // participant finishes. Two modes:
-//   main:  Explore (timed) -> Report (3 steps)
+//   main:  Explore (timed; drag pictures in to add things, Delete removes the selected one) -> Report (3 steps)
 //   task:  one generalisation task in an empty world: drop things in from a palette, 1 minute (see generalisation.ts)
 
 import type { Config } from '../config';
@@ -15,7 +15,7 @@ import { ControlsLegend, InspectPanel, type InspectInfo, PhaseBanner } from '../
 import { h } from '../ui/dom';
 import { Notepad } from '../ui/notepad';
 import { REPORT, ReportPanel } from '../ui/report';
-import { PALETTE_SALT, parseKey, shuffledTokens, tokenKey, tokenName, tokenSvg } from '../ui/tokens';
+import { PALETTE_SALT, type Token, parseKey, shuffledTokens, tokenKey, tokenName, tokenSvg } from '../ui/tokens';
 import { GEN, type TaskKey, isTaskSuccess } from './generalisation';
 import { saveBackup as saveMainBackup } from './storage';
 
@@ -65,7 +65,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     (open) => session.log('notepad_toggle', { open }),
     (text, reason) => session.log('notepad', { text, reason }),
   );
-  stage.append(inspect.el, legend.el, ...(task ? [] : [notepad.el]));
+  // the inspect panel (colour, size, speed, parts of the selected thing) is for debugging only
+  stage.append(...(cfg.debug ? [inspect.el] : []), legend.el, ...(task ? [] : [notepad.el]));
   if (cfg.debug) stage.append(hud);
   root.append(shell);
 
@@ -136,8 +137,16 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     },
   );
 
-  // ---- generalisation task: palette of all elements (only cells in the flat condition), dropped onto the world
+  // ---- palettes of pictures that participants drag onto the world to add that element (the sim's spawn action)
   const look = { colours: [skin.cell.map(hex), skin.species.map(hex), skin.herd.map(hex)], shapes: skin.wobble > 0 ? skin.nucleus : skin.glyph };
+  const tokenPick = (t: Token) => {
+    const el = h('span', { class: 'token pick', draggable: 'true', title: tokenName(t), 'data-token': tokenKey(t) });
+    el.innerHTML = tokenSvg(t, look);
+    el.addEventListener('dragstart', (e) => e.dataTransfer?.setData('text/plain', tokenKey(t)));
+    return el;
+  };
+
+  // generalisation task: all elements (only cells in the flat condition), at most GEN.maxSpawns drops
   let spawns = 0;
   let success: { tick: number; tiers: [number, number] } | null = null;
   const taskStatus = h('p', { class: 'task-status', id: 'task-status' });
@@ -145,31 +154,37 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   if (task) {
     const order = shuffledTokens(cfg.seed, PALETTE_SALT[task], cfg.hier ? 3 : 1);
     session.log('palette_order', { where: task, order: order.map(tokenKey) });
-    for (const t of order) {
-      const el = h('span', { class: 'token pick', draggable: 'true', title: tokenName(t), 'data-token': tokenKey(t) });
-      el.innerHTML = tokenSvg(t, look);
-      el.addEventListener('dragstart', (e) => e.dataTransfer?.setData('text/plain', tokenKey(t)));
-      taskPalette.append(el);
-    }
+    taskPalette.append(...order.map(tokenPick));
   }
   const taskPanel = h('section', { class: 'panel report task' }, h('h3', {}, GEN.palette), taskPalette, taskStatus);
-  if (task) {
-    const canvas = renderer.canvas;
-    canvas.addEventListener('dragover', (e) => e.preventDefault());
-    canvas.addEventListener('drop', (e) => {
-      e.preventDefault();
-      const t = parseKey(e.dataTransfer?.getData('text/plain') ?? '');
-      if (!t || spawns >= GEN.maxSpawns) return;
-      const r = canvas.getBoundingClientRect();
-      const [x, y] = renderer.camera.screenToWorld(e.clientX - r.left, e.clientY - r.top);
-      act({ kind: 'spawn', tier: t.tier as Tier, type: t.type, x, y });
-      spawns++;
-      if (spawns >= GEN.maxSpawns) {
-        taskPalette.classList.add('spent');
-        if (!success) taskStatus.textContent = GEN.outOfSpawns;
-      }
-    });
+
+  // Explore: a strip over the world, no limit. composition=no: every element at every size (they arrive whole, parts
+  // never shown); composition=yes: cells only, so anything bigger has to be built by hand
+  const addStrip = h('div', { class: 'add-strip', id: 'add-strip' });
+  if (!task) {
+    const order = shuffledTokens(cfg.seed, PALETTE_SALT.explore, cfg.hier && !cfg.composition ? 3 : 1);
+    session.log('palette_order', { where: 'explore', order: order.map(tokenKey) });
+    addStrip.append(h('span', { class: 'muted' }, 'drag in to add'), ...order.map(tokenPick));
+    stage.append(addStrip);
   }
+
+  // dropping a picture on the world adds that element where it was dropped
+  renderer.canvas.addEventListener('dragover', (e) => e.preventDefault());
+  renderer.canvas.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const t = parseKey(e.dataTransfer?.getData('text/plain') ?? '');
+    if (!t) return;
+    if (task ? spawns >= GEN.maxSpawns : phase !== 0) return; // main mode: Explore only
+    const r = renderer.canvas.getBoundingClientRect();
+    const [x, y] = renderer.camera.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+    act({ kind: 'spawn', tier: t.tier as Tier, type: t.type, x, y });
+    if (!task) return;
+    spawns++;
+    if (spawns >= GEN.maxSpawns) {
+      taskPalette.classList.add('spent');
+      if (!success) taskStatus.textContent = GEN.outOfSpawns;
+    }
+  });
 
   // ---- phases
   let phase = -1;
@@ -262,7 +277,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
 
     layout = computeLayout(state);
     renderer.draw(state, layout, { selected, hovered, debug: cfg.debug, contents: !cfg.composition ? 'never' : cfg.reveal ? 'hover' : 'always', skin, time: (performance.now() - t0) / 1000, flash: performance.now() < flash.until ? flash.id : -1 });
-    inspect.update(inspectInfo());
+    if (cfg.debug) inspect.update(inspectInfo());
 
     if (task) {
       const left = GEN.durationMs - (performance.now() - phaseStart);
