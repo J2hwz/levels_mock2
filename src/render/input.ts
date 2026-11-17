@@ -5,7 +5,7 @@
 //   dropping never builds anything: things just meet (so lock & key / catalysis can be seen).
 //   C while dragging: join the compatible parent it touches, else combine it with every loose same-level
 //   thing touching it into a new parent; then keep dragging that whole. drag background: pan; wheel: zoom
-//   Esc: clear selection; I: isolate toggle; S (debug only): swap realisation; C: see above
+//   Esc: clear selection; S (debug only): swap realisation; C: see above
 //   composition=no: only whole things can be hovered, selected or dragged, and C does nothing
 
 import type { Action, WorldState } from '../sim/world';
@@ -210,9 +210,6 @@ export class InputController {
     const sel = this.host.selected();
     if (e.key === 'Escape') {
       this.host.select(null);
-    } else if (e.key === 'i' || e.key === 'I') {
-      const iso = this.host.state.isolated;
-      this.host.act({ kind: 'isolate', id: iso >= 0 ? null : sel >= 0 ? sel : null });
     } else if ((e.key === 's' || e.key === 'S') && this.host.debug && sel >= 0) {
       this.host.act({ kind: 'swap', id: sel });
     }

@@ -50,8 +50,8 @@ describe('replay', () => {
         for (const a of script.get(session.state.tick) ?? []) session.act(a);
         session.tick();
       }
-      // a few actions while "paused" at the final tick
-      session.act({ kind: 'speed', speed: 0 });
+      // an action at the final tick
+      session.act({ kind: 'select', id: null });
       session.end();
       // round-trip through JSON exactly like the downloaded file
       const log = JSON.parse(JSON.stringify(session.toJSON()));
@@ -69,7 +69,7 @@ describe('replay', () => {
   it.skipIf(!existsSync(fixture))('replays the log recorded in a real browser run-through', () => {
     const log = JSON.parse(readFileSync(fixture, 'utf8'));
     const kinds = new Set(log.events.filter((e: { type: string }) => e.type === 'action').map((e: { payload: { kind: string } }) => e.payload.kind));
-    expect([...kinds]).toEqual(expect.arrayContaining(['select', 'dragStart', 'dragMove', 'dragEnd', 'detach', 'join', 'combine', 'isolate', 'speed']));
+    expect([...kinds]).toEqual(expect.arrayContaining(['select', 'dragStart', 'dragMove', 'dragEnd', 'detach', 'join', 'combine']));
     const res = replay(log);
     expect(res.mismatches).toEqual([]);
     expect(res.actualHash).toBe(res.expectedHash);
@@ -234,9 +234,6 @@ describe('combining', () => {
     // a type no species uses
     s.grammar.species = s.grammar.species.map((rs) => rs.map((rc) => rc.filter((t) => t !== b.type)));
     expect(canCombine(s, [a.id, b.id])).toBe(false);
-    const t = world();
-    applyAction(t, { kind: 'isolate', id: a.id });
-    expect(canCombine(t, [a.id, b.id])).toBe(false);
     const f = world(false);
     expect(canCombine(f, [f.entities[0].id, f.entities[1].id])).toBe(false);
     const n = f.entities.length;
@@ -412,6 +409,19 @@ describe('composition=no (compose: false): parts exist but can never be used or 
     }
     session.end();
     expect(replay(session.toJSON()).ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------- removed controls
+
+describe('removed controls (time speed, isolate)', () => {
+  it('actions of kinds that no longer exist (in old data files) change nothing', () => {
+    const s = createWorld({ hier: true, eps: 0.05, seed: 42 });
+    const before = hashWorld(s);
+    const herd = s.entities.find((e) => e.tier === 2)!;
+    for (const a of [{ kind: 'isolate', id: herd.id }, { kind: 'speed', speed: 0 }]) applyAction(s, a as unknown as Parameters<typeof applyAction>[1]);
+    expect(hashWorld(s)).toBe(before);
+    expect('isolated' in s).toBe(false);
   });
 });
 

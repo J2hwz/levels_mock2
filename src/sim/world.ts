@@ -293,8 +293,6 @@ export interface WorldState {
   grammar: Grammar;
   laws: Laws;
   regions: Region[];
-  /** id of isolated entity, or -1 */
-  isolated: number;
   drag: { id: number; x: number; y: number } | null;
   /**
    * Encounters already rolled for, by pair key (lower id * PAIR_KEY + higher id). An entry is cleared when the pair
@@ -328,8 +326,6 @@ export type Action =
   | { kind: 'join'; id: number; parent: number }
   /** free same-tier entities (2+) found a new parent one tier up; ids[0] is the dragged one */
   | { kind: 'combine'; ids: number[] }
-  | { kind: 'isolate'; id: number | null }
-  | { kind: 'speed'; speed: number }
   | { kind: 'swap'; id: number }
   /** generalisation tasks: drop a new element into the world (a larger one arrives made of its recipe-0 parts) */
   | { kind: 'spawn'; tier: Tier; type: number; x: number; y: number };
@@ -802,7 +798,7 @@ function buildHerd(s: WorldState, kind: number, realisation: number, x: number, 
 }
 
 function emptyState(config: SimConfig, rng: RngState, grammar: Grammar, laws: Laws): WorldState {
-  return { config, tick: 0, rng, nextId: 0, entities: [], grammar, laws, regions: [], isolated: -1, drag: null, contacts: new Map() };
+  return { config, tick: 0, rng, nextId: 0, entities: [], grammar, laws, regions: [], drag: null, contacts: new Map() };
 }
 
 function placeAwayFrom(r: RngState, pts: [number, number][], minD: number, margin: number): [number, number] {
@@ -875,14 +871,6 @@ export function createWorld(config: SimConfig): WorldState {
 
 // ---------------------------------------------------------------- structural edits
 
-function isActiveSet(s: WorldState): Uint8Array | null {
-  if (s.isolated < 0) return null;
-  const a = new Uint8Array(s.entities.length);
-  a[s.isolated] = 1;
-  for (const d of descendants(s, s.isolated)) a[d] = 1;
-  return a;
-}
-
 function removeChild(parent: Entity, childId: number): void {
   const i = parent.children.indexOf(childId);
   if (i >= 0) parent.children.splice(i, 1);
@@ -916,7 +904,6 @@ function kill(s: WorldState, e: Entity): void {
   unbond(s, e);
   e.alive = false;
   e.children = [];
-  if (s.isolated === e.id) s.isolated = -1;
   if (s.drag && s.drag.id === e.id) s.drag = null;
 }
 
@@ -1059,7 +1046,7 @@ export function combineKind(s: WorldState, tier: Tier, types: readonly number[])
  * be in the group too (a pair is never split by combining).
  */
 export function canCombine(s: WorldState, ids: readonly number[]): boolean {
-  if (!s.config.hier || s.isolated >= 0 || ids.length < 2 || new Set(ids).size !== ids.length) return false;
+  if (!s.config.hier || ids.length < 2 || new Set(ids).size !== ids.length) return false;
   const ms = ids.map((id) => s.entities[id]);
   if (ms.some((m) => !m || !m.alive || m.parent >= 0)) return false;
   const tier = ms[0].tier;
@@ -1221,9 +1208,6 @@ export function applyAction(s: WorldState, a: Action): SimEvent[] {
     case 'combine':
       if (s.config.compose !== false && canCombine(s, a.ids)) foundParent(s, a.ids, events);
       break;
-    case 'isolate':
-      s.isolated = validId(s, a.id) ? a.id : -1;
-      break;
     case 'swap':
       if (validId(s, a.id)) swapRealisation(s, s.entities[a.id], events);
       break;
@@ -1231,7 +1215,6 @@ export function applyAction(s: WorldState, a: Action): SimEvent[] {
       spawn(s, a.tier, a.type, a.x, a.y);
       break;
     case 'select':
-    case 'speed':
       break; // UI-only; logged but no effect on the world
   }
   return events;
@@ -1252,8 +1235,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
   const drift = s.config.move !== false;
   const ents = s.entities;
   const n = ents.length;
-  const active = isActiveSet(s);
-  const on = (e: Entity) => e.alive && (active === null || active[e.id] === 1);
+  const on = (e: Entity) => e.alive;
   const fx = new Float64Array(n);
   const fy = new Float64Array(n);
   const crowd = new Float64Array(n);
@@ -1707,7 +1689,6 @@ export function snapshotWorld(s: WorldState): unknown {
     tick: s.tick,
     rng: s.rng.s,
     nextId: s.nextId,
-    isolated: s.isolated,
     drag: s.drag,
     regions: s.regions,
     entities: s.entities.filter((e) => e.alive),

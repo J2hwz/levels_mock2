@@ -136,10 +136,9 @@ for (const hier of [1, 0]) {
 
 // mechanisms (lock & key: purple + green; catalysis: light blue makes red spin; every level, by chance), contents always shown
 {
-  const page = await openSandbox('?seed=42&debug=1&short=1&reveal=0&cross=0');
+  const page = await openSandbox('?seed=42&debug=1&short=1&reveal=0&cross=0&move=0');
   await page.waitForTimeout(3000);
   await page.screenshot({ path: `${OUT}/hier1_dynamics.png` });
-  await page.locator('[data-speed="0"]').click();
 
   /** centre the camera on a world point */
   const look = (x, y, zoom) => page.evaluate(([x, y, zoom]) => Object.assign(window.__sandbox.camera, { x, y, zoom }), [x, y, zoom]);
@@ -181,9 +180,7 @@ for (const hier of [1, 0]) {
   }
   if (inside.herd) {
     await look(inside.herd.x, inside.herd.y, 2.6);
-    await page.locator('[data-speed="1"]').click();
     await page.waitForTimeout(700);
-    await page.locator('[data-speed="0"]').click();
     await page.screenshot({ path: `${OUT}/mech_catalysis_in_herd.png` });
   }
   console.log('organism with a lock pair inside:', inside.org?.id, '| herd with a spinning target, member spins:', inside.herd?.spin);
@@ -207,7 +204,6 @@ for (const hier of [1, 0]) {
   await page.waitForTimeout(200);
   const [ax, ay] = await screenPos(page, pair.a);
   await page.mouse.click(ax, ay);
-  await page.locator('[data-speed="1"]').click();
   B = await ent(pair.b);
   let release = await dragHold(pair.a, B.x - 16, B.y);
   await page.waitForTimeout(150);
@@ -217,7 +213,6 @@ for (const hier of [1, 0]) {
   await page.screenshot({ path: `${OUT}/mech_lock_bound_pair.png` });
   console.log(`dragged purple #${pair.a} into range of green #${pair.b} (still held): bond ${A.bond}`);
   await release();
-  await page.locator('[data-speed="0"]').click();
 
   // drag a lone light blue organism into range of a lone red one (time running): a line, then the red one spins (90%)
   const orgs = await page.evaluate(() => {
@@ -249,7 +244,6 @@ for (const hier of [1, 0]) {
       const r = (e) => 6 + 2.4 * e.children.length + 9;
       return r(s.entities[c]) + r(s.entities[t]) + 4;
     }, { c: orgs.cat, t: orgs.tgt });
-    await page.locator('[data-speed="1"]').click();
     const T2 = await ent(orgs.tgt);
     release = await dragHold(orgs.cat, T2.x - rT, T2.y);
     // the target keeps wandering while time runs: finish the drag where it is now
@@ -292,9 +286,7 @@ for (const hier of [1, 0]) {
   const [hx, hy] = await screenPos(page, hc.cell);
   await page.mouse.click(hx, hy);
   await dragTo(hc.cell, H.x + H.r * 0.5, H.y);
-  await page.locator('[data-speed="1"]').click();
   await page.waitForTimeout(1500);
-  await page.locator('[data-speed="0"]').click();
   const C1 = await ent(hc.cell);
   const Hn = await page.evaluate((id) => {
     const e = window.__sandbox.state.entities[id];
@@ -309,7 +301,7 @@ for (const hier of [1, 0]) {
 
 // ---- 2. full run-through (hier=1, proxy) through every phase, then download the log
 {
-  const page = await openSandbox('?hier=1&seed=7&debug=1&short=1&cross=0');
+  const page = await openSandbox('?hier=1&seed=7&debug=1&short=1&cross=0&move=0');
   await page.waitForTimeout(1000);
   // zoom onto a herd
   const ids = await page.evaluate(() => {
@@ -326,7 +318,6 @@ for (const hier of [1, 0]) {
   await page.waitForTimeout(200);
   await page.keyboard.press('Digit1'); // harmless key
   // pause so positions are stable for clicking
-  await page.locator('[data-speed="0"]').click();
   await page.waitForTimeout(200);
 
   // the inspect panel redraws on the next frame: wait for it before reading
@@ -349,9 +340,7 @@ for (const hier of [1, 0]) {
   await page.mouse.down();
   for (let i = 1; i <= 10; i++) await page.mouse.move(x + i * 8, y + i * 4);
   await page.mouse.up();
-  await page.locator('[data-speed="1"]').click();
   await page.waitForTimeout(800);
-  await page.locator('[data-speed="0"]').click();
 
   // shift-drag a cell out of its organism
   [x, y] = await screenPos(page, ids.cell2);
@@ -425,36 +414,33 @@ for (const hier of [1, 0]) {
     return p >= 0 && s.entities[b].parent === p ? { id: p, tier: s.entities[p].tier, children: s.entities[p].children } : null;
   }, pair);
   console.log('drop combined two loose cells into', founded);
-  await page.locator('[data-speed="1"]').click();
   await page.waitForTimeout(1000);
   await page.screenshot({ path: `${OUT}/runthrough_1b_combine.png` });
 
-  // isolate, wheel zoom, pan, speeds
+  // wheel zoom, pan; I does nothing any more (no isolation)
+  const aliveBeforeI = await page.evaluate(() => window.__sandbox.state.entities.filter((e) => e.alive).length);
   await page.keyboard.press('i');
-  await page.locator('[data-speed="2"]').click();
-  await page.waitForTimeout(800);
-  await page.keyboard.press('i');
+  await page.waitForTimeout(300);
+  console.log('time buttons present:', await page.locator('[data-speed]').count(), '| Controls rows mentioning freeze:', await page.locator('#controls-legend', { hasText: 'freeze' }).count());
   await page.mouse.move(700, 450);
   await page.mouse.wheel(0, 300);
   await page.mouse.move(100, 120);
   await page.mouse.down();
   await page.mouse.move(160, 170, { steps: 5 });
   await page.mouse.up();
-  await page.locator('[data-speed="0.5"]').click();
   await page.screenshot({ path: `${OUT}/runthrough_1_explore.png` });
 
-  // notepad: open it, type (the letters i and c must not isolate or combine), pause so it is logged, hide it
+  // notepad: open it, type (the letter c must not combine), pause so it is logged, hide it
   await page.locator('#notepad-open').click();
   await page.locator('#notepad-text').pressSequentially('pink blobs circle each other; cells inside a blob stick together');
-  const isoAfterTyping = await page.evaluate(() => window.__sandbox.state.isolated);
+  const aliveAfterTyping = await page.evaluate(() => window.__sandbox.state.entities.filter((e) => e.alive).length);
   await page.waitForTimeout(2500);
   await page.screenshot({ path: `${OUT}/runthrough_1c_notepad.png` });
   await page.locator('#notepad-hide').click();
-  console.log('notepad typed (isolated after typing i/c:', isoAfterTyping, ')');
+  console.log('notepad typed; things alive before pressing I / after typing:', aliveBeforeI, aliveAfterTyping);
 
   // phase 2: report. Step 1: open description only
   await page.locator('#phase-skip').click();
-  await page.locator('[data-speed="1"]').click();
   await page.locator('#report-describe').fill('There are coloured blobs made of little dots, and big hazes made of blobs. Purple and green stick together.');
   await page.locator('#report-describe').blur();
   await page.screenshot({ path: `${OUT}/runthrough_2_report_describe.png` });

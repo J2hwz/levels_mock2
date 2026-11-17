@@ -11,7 +11,7 @@ import { Renderer } from '../render/renderer';
 import { SKINS, hex } from '../render/skins';
 import { hashWorld } from '../sim/hash';
 import { type Action, P, type Tier, chanceOf } from '../sim/world';
-import { ControlsLegend, InspectPanel, type InspectInfo, PhaseBanner, TimeControls } from '../ui/controls';
+import { ControlsLegend, InspectPanel, type InspectInfo, PhaseBanner } from '../ui/controls';
 import { h } from '../ui/dom';
 import { Notepad } from '../ui/notepad';
 import { REPORT, ReportPanel } from '../ui/report';
@@ -56,8 +56,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   const side = h('aside', { class: 'side', style: 'display:none' });
   const hud = h('pre', { class: 'hud' });
   const inspect = new InspectPanel();
-  const timeControls = new TimeControls((s) => setSpeed(s));
-  const banner = new PhaseBanner(timeControls.el, cfg.debug);
+  const banner = new PhaseBanner(cfg.debug);
   const shell = h('div', { class: `sandbox skin-${cfg.skin}` }, banner.el, h('div', { class: 'main' }, stage, side));
   const legend = new ControlsLegend(cfg.debug, cfg.reveal, cfg.lock, cfg.composition, (open) => session.log('legend', { open }));
   // participant notes, available in every phase of the main sandbox (starts closed; bottom right of the world)
@@ -81,7 +80,6 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   // ---- interaction state
   let selected = -1;
   let hovered = -1;
-  let speed = 1;
   let layout: Layout = computeLayout(state);
 
   const act = (a: Action) => {
@@ -90,10 +88,6 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   const select = (id: number | null) => {
     selected = id ?? -1;
     act({ kind: 'select', id });
-  };
-  const setSpeed = (s: number) => {
-    speed = s;
-    act({ kind: 'speed', speed: s });
   };
 
   // a brief red ring when C finds nothing it can combine
@@ -230,7 +224,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     const dt = Math.min(renderer.app.ticker.deltaMS, 100);
     fps = fps * 0.95 + (1000 / Math.max(1, renderer.app.ticker.deltaMS)) * 0.05;
     input.flush();
-    acc += dt * speed;
+    acc += dt;
     let n = 0;
     while (acc >= TICK_MS && n < MAX_TICKS_PER_FRAME) {
       const evs = session.tick();
@@ -253,7 +247,6 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     layout = computeLayout(state);
     renderer.draw(state, layout, { selected, hovered, debug: cfg.debug, contents: !cfg.composition ? 'never' : cfg.reveal ? 'hover' : 'always', skin, time: (performance.now() - t0) / 1000, flash: performance.now() < flash.until ? flash.id : -1 });
     inspect.update(inspectInfo());
-    legend.setIsolated(state.isolated >= 0);
 
     if (task) {
       const left = GEN.durationMs - (performance.now() - phaseStart);
@@ -269,11 +262,11 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     if (cfg.debug) {
       hud.textContent =
         chanceText +
-        `tick ${state.tick}  hash ${hashWorld(state)}  fps ${fps.toFixed(0)}  speed ${speed}×\n` +
+        `tick ${state.tick}  hash ${hashWorld(state)}  fps ${fps.toFixed(0)}\n` +
         `hier=${cfg.hier ? 1 : 0} composition=${cfg.composition ? 'yes' : 'no'} movement=${cfg.movement} chance=${cfg.chance} cross=${cfg.cross.toFixed(2)} skin=${cfg.skin} seed=${cfg.seed} eps=${cfg.eps}\n` +
         `alive: ${[0, 1, 2].map((t) => state.entities.filter((e) => e.alive && e.tier === t).length).join('/')} (cells/organisms/herds)` +
-        `  isolated=${state.isolated}  events=${session.logger.events.length}\n` +
-        `keys: Esc clear · I isolate · S swap realisation (debug)`;
+        `  events=${session.logger.events.length}\n` +
+        `keys: Esc clear · S swap realisation (debug)`;
     }
   };
 

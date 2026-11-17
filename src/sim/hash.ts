@@ -26,7 +26,6 @@ export function hashWorld(s: WorldState): string {
   h.num(s.tick);
   h.num(s.rng.s);
   h.num(s.nextId);
-  h.num(s.isolated);
   h.num(s.drag ? s.drag.id : -1);
   h.num(s.drag ? s.drag.x : 0);
   h.num(s.drag ? s.drag.y : 0);

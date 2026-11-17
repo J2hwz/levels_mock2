@@ -1,7 +1,7 @@
 // Pixi drawing. Reads the world + display layout; never mutates the world.
 
 import { Application, Container, Graphics, Text } from 'pixi.js';
-import { type Entity, P, type WorldState, catalysisAnyOn, descendants, DYNAMICS, PAIR_KEY, RULE_CAT, RULE_LOCK } from '../sim/world';
+import { type Entity, P, type WorldState, catalysisAnyOn, DYNAMICS, PAIR_KEY, RULE_CAT, RULE_LOCK } from '../sim/world';
 import { Camera } from './camera';
 import { type Layout, openRoots } from './layout';
 import { type Glyph, type SkinDef, lerpColor } from './skins';
@@ -11,7 +11,7 @@ export interface ViewState {
   hovered: number;
   debug: boolean;
   /**
-   * What participants see inside organisms and herds: 'hover' = solid colour unless hovered / selected / isolated,
+   * What participants see inside organisms and herds: 'hover' = solid colour unless hovered / selected,
    * 'always' = contents always drawn, 'never' = always solid colour, no health bars (composition=no)
    */
   contents: 'hover' | 'always' | 'never';
@@ -65,17 +65,10 @@ export class Renderer {
     const px = 1 / cam.zoom; // one screen pixel in world units
     const sk = v.skin;
 
-    let activeSet: Uint8Array | null = null;
-    if (s.isolated >= 0) {
-      activeSet = new Uint8Array(s.entities.length);
-      activeSet[s.isolated] = 1;
-      for (const d of descendants(s, s.isolated)) activeSet[d] = 1;
-    }
-    const dim = (e: Entity) => (activeSet && !activeSet[e.id] ? 0.22 : 1);
 
     // reveal: a top-level composite is closed (drawn as its colour only) unless something in it is
-    // hovered, selected or isolated; everything inside a closed one is hidden
-    const open = v.contents === 'hover' ? openRoots(s, [v.hovered, v.selected, s.isolated]) : v.contents === 'never' ? new Set<number>() : null;
+    // hovered or selected; everything inside a closed one is hidden
+    const open = v.contents === 'hover' ? openRoots(s, [v.hovered, v.selected]) : v.contents === 'never' ? new Set<number>() : null;
     const bars = v.contents !== 'never';
     const rootOf = (e: Entity) => {
       let r = e;
@@ -103,7 +96,7 @@ export class Renderer {
       const a = layout[e.id];
       const b = layout[e.bond];
       if (!a || !b) continue;
-      this.gRegion.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2 * px, color: sk.ui, alpha: 0.5 * dim(e) });
+      this.gRegion.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2 * px, color: sk.ui, alpha: 0.5 });
     }
     // catalysis turns things: show the orientation of organisms and herds at levels where it is on
     const spinMark = (t: number) => catalysisAnyOn(s.config, t);
@@ -112,23 +105,22 @@ export class Renderer {
       if (!e.alive) continue;
       const n = layout[e.id];
       if (!n || hidden(e)) continue;
-      const a = dim(e);
       const shut = closed(e);
       if (e.tier === 2) {
         const col = sk.herd[e.type];
-        this.gHerd.circle(n.x, n.y, n.r).fill({ color: col, alpha: (shut ? CLOSED_ALPHA : sk.herdFill) * a });
-        this.gHerd.circle(n.x, n.y, n.r).stroke({ width: 1.5 * px, color: col, alpha: sk.herdStroke * a });
-        if (spinMark(2)) rimMark(this.gHerd, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.06, 3 * px), col, a);
-        if (bars && e.health < 1) this.healthBar(this.gHerd, n.x, n.y - n.r - 6 * px, Math.max(n.r * 0.6, 20 * px), e.health, sk, a);
+        this.gHerd.circle(n.x, n.y, n.r).fill({ color: col, alpha: (shut ? CLOSED_ALPHA : sk.herdFill) });
+        this.gHerd.circle(n.x, n.y, n.r).stroke({ width: 1.5 * px, color: col, alpha: sk.herdStroke });
+        if (spinMark(2)) rimMark(this.gHerd, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.06, 3 * px), col);
+        if (bars && e.health < 1) this.healthBar(this.gHerd, n.x, n.y - n.r - 6 * px, Math.max(n.r * 0.6, 20 * px), e.health, sk);
       } else if (e.tier === 1) {
         const col = sk.species[e.type];
         blob(this.gOrg, n.x, n.y, n.r, sk.wobble, v.time * 1.3 + e.id, e.angle);
-        this.gOrg.fill({ color: col, alpha: (shut ? CLOSED_ALPHA : sk.membraneFill) * a });
+        this.gOrg.fill({ color: col, alpha: (shut ? CLOSED_ALPHA : sk.membraneFill) });
         blob(this.gOrg, n.x, n.y, n.r, sk.wobble, v.time * 1.3 + e.id, e.angle);
-        this.gOrg.stroke({ width: Math.max(1.5 * px, n.r * 0.08), color: col, alpha: sk.membraneStroke * a });
-        if (spinMark(1)) rimMark(this.gOrg, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.12, 1.5 * px), col, a);
+        this.gOrg.stroke({ width: Math.max(1.5 * px, n.r * 0.08), color: col, alpha: sk.membraneStroke });
+        if (spinMark(1)) rimMark(this.gOrg, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.12, 1.5 * px), col);
         const w = Math.max(n.r * 1.3, 14 * px);
-        if (bars) this.healthBar(this.gOrg, n.x, n.y - n.r - w * 0.15 - 2 * px, w, e.health, sk, a);
+        if (bars) this.healthBar(this.gOrg, n.x, n.y - n.r - w * 0.15 - 2 * px, w, e.health, sk);
       } else {
         // stress: the cell darkens and flickers (red is an element colour, so no red tint)
         const stressT = Math.min(1, e.signal / 0.6);
@@ -136,13 +128,13 @@ export class Renderer {
         const flicker = 1 - 0.4 * stressT * (0.5 + 0.5 * Math.sin(v.time * 12 + e.id));
         const r = Math.max(n.r, 0.6 * px);
         if (sk.wobble > 0) {
-          this.gCell.circle(n.x, n.y, r).fill({ color: col, alpha: 0.3 * a * flicker });
-          this.gCell.circle(n.x, n.y, r).stroke({ width: r * 0.22, color: col, alpha: sk.cellAlpha * a * flicker });
+          this.gCell.circle(n.x, n.y, r).fill({ color: col, alpha: 0.3 * flicker });
+          this.gCell.circle(n.x, n.y, r).stroke({ width: r * 0.22, color: col, alpha: sk.cellAlpha * flicker });
           glyph(this.gCell, sk.nucleus[e.type], n.x, n.y, r * 0.55, e.angle);
-          this.gCell.fill({ color: col, alpha: a * flicker });
+          this.gCell.fill({ color: col, alpha: flicker });
         } else {
           glyph(this.gCell, sk.glyph[e.type], n.x, n.y, r, e.angle);
-          this.gCell.fill({ color: col, alpha: a * flicker });
+          this.gCell.fill({ color: col, alpha: flicker });
         }
       }
     }
@@ -155,7 +147,6 @@ export class Renderer {
     };
     if (v.hovered !== v.selected) ring(v.hovered, 0.45, 1.5);
     ring(v.selected, 0.95, 2.5);
-    if (s.isolated >= 0) ring(s.isolated, 0.5, 6);
     if (v.flash >= 0 && s.entities[v.flash]?.alive) {
       const n = layout[v.flash];
       if (n) this.gOver.circle(n.x, n.y, n.r + 5 * px).stroke({ width: 3 * px, color: sk.stress, alpha: 0.9 });
@@ -224,11 +215,11 @@ export class Renderer {
     }
   }
 
-  private healthBar(g: Graphics, cx: number, y: number, w: number, health: number, sk: SkinDef, a = 1): void {
+  private healthBar(g: Graphics, cx: number, y: number, w: number, health: number, sk: SkinDef): void {
     const h = Math.max(w * 0.12, 2 / this.camera.zoom);
-    g.rect(cx - w / 2, y - h, w, h).fill({ color: sk.healthBg, alpha: 0.8 * a });
+    g.rect(cx - w / 2, y - h, w, h).fill({ color: sk.healthBg, alpha: 0.8 });
     const col = lerpColor(sk.stress, sk.health, health);
-    g.rect(cx - w / 2, y - h, w * Math.max(0, health), h).fill({ color: col, alpha: a });
+    g.rect(cx - w / 2, y - h, w * Math.max(0, health), h).fill({ color: col });
   }
 
   private drawLabels(s: WorldState, layout: Layout, v: ViewState, px: number): void {
@@ -269,8 +260,8 @@ export class Renderer {
 const CLOSED_ALPHA = 0.85;
 
 /** small dot on the rim at the entity's orientation */
-function rimMark(g: Graphics, x: number, y: number, r: number, angle: number, size: number, color: number, alpha: number): void {
-  g.circle(x + r * Math.cos(angle), y + r * Math.sin(angle), size).fill({ color, alpha });
+function rimMark(g: Graphics, x: number, y: number, r: number, angle: number, size: number, color: number): void {
+  g.circle(x + r * Math.cos(angle), y + r * Math.sin(angle), size).fill({ color });
 }
 
 function blob(g: Graphics, x: number, y: number, r: number, wob: number, phase: number, angle = 0): void {

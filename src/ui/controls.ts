@@ -1,38 +1,6 @@
-// Time controls, inspect panel and phase banner.
+// Inspect panel, controls legend and phase banner.
 
 import { h } from './dom';
-
-export const SPEEDS = [0, 0.5, 1, 2] as const;
-
-export class TimeControls {
-  readonly el = h('div', { class: 'time-controls' });
-  private speed = 1;
-
-  constructor(private readonly onSpeed: (s: number) => void) {
-    this.render();
-  }
-
-  set(s: number): void {
-    this.speed = s;
-    this.render();
-  }
-
-  private render(): void {
-    this.el.replaceChildren(
-      ...SPEEDS.map((s) =>
-        h('button', {
-          class: 'small' + (s === this.speed ? ' active' : ''),
-          'data-speed': s,
-          onclick: () => {
-            if (s === this.speed) return;
-            this.set(s);
-            this.onSpeed(s);
-          },
-        }, s === 0 ? '❚❚ pause' : `${s}×`),
-      ),
-    );
-  }
-}
 
 export interface InspectInfo {
   colour: string;
@@ -69,7 +37,6 @@ export class InspectPanel {
 export class ControlsLegend {
   readonly el = h('div', { class: 'legend', id: 'controls-legend' });
   private open = true;
-  private isolated = false;
 
   constructor(
     private readonly debug: boolean,
@@ -80,13 +47,6 @@ export class ControlsLegend {
     private readonly compose: boolean,
     private readonly onToggle: (open: boolean) => void,
   ) {
-    this.render();
-  }
-
-  /** highlight the I row while isolation is on */
-  setIsolated(on: boolean): void {
-    if (on === this.isolated) return;
-    this.isolated = on;
     this.render();
   }
 
@@ -103,8 +63,8 @@ export class ControlsLegend {
       this.el.replaceChildren(toggle);
       return;
     }
-    const row = (keys: string[], what: string, active = false) =>
-      h('tr', active ? { class: 'active' } : {},
+    const row = (keys: string[], what: string) =>
+      h('tr', {},
         h('td', {}, ...keys.flatMap((k, i) => [i ? ' + ' : '', h('kbd', {}, k)])),
         h('td', {}, what));
     this.el.replaceChildren(
@@ -119,7 +79,6 @@ export class ControlsLegend {
           ? this.sticks ? [row(['Shift', 'Drag'], 'pull it off what it is stuck to')] : []
           : [row(['Shift', 'Drag'], this.sticks ? 'pull it out of what it is in (what is stuck to it comes too), or off what it is stuck to' : 'pull it out of what it is in')]),
         ...(this.compose ? [row(['Drag', 'C'], 'combine it with whatever it is touching')] : []),
-        row(['I'], this.isolated ? 'unfreeze everything (frozen now)' : 'freeze everything except selection', this.isolated),
         row(['Scroll'], 'zoom'),
         row(['Drag background'], 'move around'),
         ...(this.debug ? [row(['S'], 'swap realisation (debug)')] : []),
@@ -136,8 +95,8 @@ export class PhaseBanner {
   readonly button = h('button', { class: 'continue', id: 'phase-continue' }, 'Continue');
   readonly skip = h('button', { class: 'small debug-skip', id: 'phase-skip', title: 'debug: skip phase' }, 'skip ▸');
 
-  constructor(timeControls: HTMLElement, debug: boolean) {
-    this.el.append(this.title, this.text, h('span', { class: 'spacer' }), this.timer, timeControls, this.button);
+  constructor(debug: boolean) {
+    this.el.append(this.title, this.text, h('span', { class: 'spacer' }), this.timer, this.button);
     if (debug) this.el.append(this.skip);
   }
 

@@ -36,7 +36,7 @@ export function scriptedActions(session: Session): Map<number, Action[]> {
   const lones = s.entities.filter((e) => e.alive && e.tier === 1 && e.parent < 0 && e !== lone);
   const m = new Map<number, Action[]>();
   const at = (t: number, ...a: Action[]) => m.set(t, [...(m.get(t) ?? []), ...a]);
-  at(5, { kind: 'select', id: cell.id }, { kind: 'speed', speed: 2 });
+  at(5, { kind: 'select', id: cell.id });
   at(10, { kind: 'dragStart', id: org.id, x: org.x, y: org.y });
   for (let i = 1; i <= 20; i++) at(10 + i, { kind: 'dragMove', id: org.id, x: org.x + i * 5, y: org.y - i * 3 });
   at(31, { kind: 'dragEnd', id: org.id });
@@ -49,8 +49,6 @@ export function scriptedActions(session: Session): Map<number, Action[]> {
   const trio = freeCells.filter((e) => e !== free && e !== pair[0] && e !== pair[1] && e.bond < 0).slice(0, 3);
   if (trio.length === 3) at(74, { kind: 'combine', ids: trio.map((e) => e.id) });
   if (lones.length >= 2) at(72, { kind: 'combine', ids: [lones[0].id, lones[1].id] });
-  at(80, { kind: 'isolate', id: herd.id });
-  at(120, { kind: 'isolate', id: null });
   at(130, { kind: 'swap', id: org.id });
   at(150, { kind: 'swap', id: herd.id });
   return m;

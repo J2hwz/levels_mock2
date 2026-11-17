@@ -175,10 +175,6 @@
   padding: 2px 7px;
   font-size: 12px;
 }
-.sandbox button.active {
-  background: var(--accent);
-  color: #000;
-}
 .sandbox button.danger:hover {
   border-color: var(--danger);
   color: var(--danger);
@@ -194,10 +190,6 @@
   background: var(--accent);
   color: #000;
   font-weight: 600;
-}
-.time-controls {
-  display: flex;
-  gap: 4px;
 }
 .inspect {
   position: absolute;
@@ -226,10 +218,6 @@
 .legend td {
   padding: 2px 6px 2px 0;
   white-space: nowrap;
-}
-.legend tr.active td {
-  color: var(--accent);
-  font-weight: 600;
 }
 .legend kbd {
   display: inline-block;

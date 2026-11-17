@@ -16,7 +16,7 @@ npm run build        # typecheck + production bundle in dist/
 
 # optional
 npx playwright install chromium   # once
-npm run screenshots  # 4 conditions + abstract skin + full scripted run-through -> screenshots/
+npm run screenshots  # conditions + abstract skin + full scripted run-through (still world, move=0) -> screenshots/
 npm run replay -- path/to/levels-sandbox-42-....json   # verify a downloaded file (main session + each task)
 ```
 
@@ -223,13 +223,12 @@ similarRepel: [false, true, true],
 | Shift + drag | a member leaves its parent, taking its lock & key partner along (the pair stays attached); a free bound cell is pulled off its partner |
 | drop things together | nothing is built: they just meet (so lock & key and catalysis can be seen) |
 | C while dragging | join the compatible parent it touches, else combine it with every loose same-level thing touching it into a new parent one level up (2+ cells → organism, 2+ organisms → herd, if the grammar allows); the drag continues with the result |
-| I | isolate: freeze everything except the selection and its parts; I again releases |
 | wheel / drag background | zoom / pan |
-| ❚❚ 0.5× 1× 2× | time controls |
 | S (debug only) | `swapRealisation` on the selection |
 
 A **controls legend** (top right of the world) lists all of these throughout the sandbox, so participants
-don't have to remember them. The `I` row highlights while isolation is on. It can be collapsed with "hide";
+don't have to remember them. Participants can't change the speed of time or freeze parts of the world: it always runs at
+normal speed. The legend can be collapsed with "hide";
 each toggle is logged as a `legend` event `{open}`.
 
 A **notepad** (bottom right of the world) lets participants write notes at any time, in every phase; the same text
@@ -294,14 +293,14 @@ src/
     hash.ts        64-bit FNV-style hash of the exact float64 state
   render/          Pixi renderer, camera, skins, pure layout/hit-testing, pointer→Action input
   log/             logger (event stream) + Session (world + log; used by the app and by tests)
-  ui/              report (questions), picture tokens (tokens.ts), notepad, inspect panel, time controls, phase banner
+  ui/              report (questions), picture tokens (tokens.ts), notepad, inspect panel, controls legend, phase banner
   experiment/      jsPsych timeline, SandboxPlugin, sandbox app loop (main + task mode), generalisation.ts (GEN), download/backup
   replay.ts        replay a log through sim/ and check every logged hash
 scripts/           screenshots.mjs (Playwright), replay.mjs (CLI)
 tests/             vitest; fixtures/browser-session.json is a real Chromium run-through log
 ```
 
-The simulation runs at a fixed 30 ticks/s, decoupled from the frame rate (an accumulator scaled by the speed setting,
+The simulation runs at a fixed 30 ticks/s, decoupled from the frame rate (an accumulator,
 at most 8 ticks per frame). Every participant action is an `Action` applied at the current tick;
 `step(state, actions)` applies them and advances one tick. All tiers update every tick.
 
@@ -346,7 +345,7 @@ Task logs have the same event types, plus `task_success {task, tick, tiers}`, `t
 | type | payload |
 |---|---|
 | `session_start` | `{hash}` of the generated world |
-| `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids}` (2+, dragged first), `isolate{id}`, `speed{speed}`, `swap{id}`, `spawn{tier, type, x, y}` (generalisation tasks: a dropped element). Coordinates are sim/world units |
+| `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids}` (2+, dragged first), `swap{id}`, `spawn{tier, type, x, y}` (generalisation tasks: a dropped element). Coordinates are sim/world units |
 | `hover` | `{id}` on every hover-target change (`null` = nothing) |
 | `camera` | `{x, y, zoom}` every 250 ms |
 | `hash` | `{hash}` every 30 ticks (1 s of sim time) |
@@ -406,11 +405,11 @@ Where the brief left something open, I chose the following.
 - **Join rule:** a free entity can join a parent one tier up if the parent is below its unstable size (8 cells / 7 organisms by default, so a participant can over-fill it by one and make it drain) and the entity's type appears in *any* recipe of the parent's species/kind. A bound pair joins together, so there must be room and a fitting type for both. It joins the nearest such parent within the two radii + 25 units. The join happens only when C is pressed while dragging (via the pure `findJoinTarget`) and is logged as an explicit `join` action.
 - **Combine rule:** on C, if no parent takes the dragged entity, it and the loose same-tier things touching it (`findCombineGroup`, logged as `combine`) found a new parent one tier up, at their
   centroid. A bound member's partner must be in the group (pairs are never split). Its species/herd kind must accept every type (each type appears in some recipe, as for join); among those, the
-  recipe covering most of the founders' types wins, with ties going to the lowest kind and then the lowest recipe. A founded composite usually starts below the size band, so it drains unless it is grown to the minimum by ordinary joins. Combining is off in the flat condition and while isolation is on, because the new
-  parent would sit outside the isolated set.
-- Isolate: only the isolated subtree is simulated, and it feels no forces from frozen entities. Springs to a frozen parent still act.
+  recipe covering most of the founders' types wins, with ties going to the lowest kind and then the lowest recipe. A founded composite usually starts below the size band, so it drains unless it is grown to the minimum by ordinary joins. Combining is off in the flat condition.
 - Dragging translates the entity and its whole subtree to the pointer. The dragged entity is held still (velocity 0) while held. At most one `dragMove` is logged per frame.
-- Time speed and selection are logged as actions but do not change the world. While paused, actions (e.g. drags) still apply immediately.
+- Selection is logged as an action but does not change the world. There are no time controls (pause / speed) or
+  isolation; they were removed, along with their `speed` and `isolate` actions. Data files recorded before that removal no
+  longer replay (the world state lost its `isolated` field).
 - **Flat condition:** cells are re-scattered at random (not at their hierarchical positions). The "single uniform matrix" is **all zeros**: a probe showed that any positive uniform attraction (even 0.02–0.05) makes clumps where 77–100 % of close pairs persist over 20 s, contradicting "groups never stabilise". At 0, pairings are transient (~40 %). Flat cells get more random motion (60 vs 30).
 - Flat health regions: 6 circles (r = 230) on a 3 × 2 grid. Region stress is the smoothed cell count inside divided by the count expected under uniform spread. Health falls when that ratio exceeds 1.5.
 
@@ -474,7 +473,7 @@ free-standing ancestor's outline. Same-level collision is unchanged.
   crowding that participants cause can still harm organisms. The `move=0` world is still a deterministic mode with its own
   hashes.
 - `reveal=1` (default): a top-level organism or herd is drawn as a solid patch of its colour, and its parts aren't drawn. It opens and shows
-  everything inside it while anything in it is hovered, selected or isolated. Hit-testing is unchanged. Cell stress colouring
+  everything inside it while anything in it is hovered or selected. Hit-testing is unchanged. Cell stress colouring
   is only visible on open things.
 
 **Display**

@@ -70,7 +70,7 @@ src/
     hash.ts        state hash used to verify replays
   render/          Pixi renderer, skins (colours/shapes), camera, pure layout + hit testing, pointer -> Action
   log/             Logger (event stream) and Session (world + log; used by app and tests)
-  ui/              report phase, picture tokens (tokens.ts), notepad, inspect panel, controls legend, time controls
+  ui/              report phase, picture tokens (tokens.ts), notepad, inspect panel, controls legend, phase banner
   experiment/      jsPsych timeline, SandboxPlugin, the app loop (main + task mode), generalisation.ts (GEN), download/backup
   replay.ts        replays a log through sim/ and checks every logged hash
 scripts/           screenshots.mjs (Playwright run-through; re-records the replay fixture), replay.mjs (CLI)
