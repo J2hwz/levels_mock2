@@ -1674,3 +1674,99 @@ describe('drawn size-pair chances (pairs=draw, total, cap)', () => {
     expect(simConfigOf(legacy).pairChance).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------- mechanisms stay inside their own whole
+
+describe('catalysis acts only within one scope (parts of the same whole, or free things)', () => {
+  /** put b next to a (edges `gap` apart) by moving b's whole tree: b's top-level ancestor is dragged */
+  const besides = (s: WorldState, a: Entity, b: Entity, gap: number) => {
+    let top = b;
+    while (top.parent >= 0) top = s.entities[top.parent];
+    const want = a.x + naturalRadius(s, a) + naturalRadius(s, b) + gap;
+    place(s, top.id, top.x + (want - b.x), top.y + (a.y - b.y));
+  };
+  const catEvents = (evs: SimEvent[], a: Entity, b: Entity) =>
+    evs.filter((e) => e.kind === 'encounter' && e.rule === 'catalysis' && ((e.a === a.id && e.b === b.id) || (e.a === b.id && e.b === a.id)));
+  const herdsOf = (s: WorldState) => s.entities.filter((e) => e.alive && e.tier === 2);
+
+  it('an organism in one herd never catalyses an organism in another herd', () =>
+    withSettings(
+      () => (DYNAMICS.catChance = ALWAYS),
+      () => {
+        const s = smallWorld({ catalysis: true });
+        const [h1, h2] = herdsOf(s);
+        const cat = s.entities[h1.children[0]];
+        const target = s.entities[h2.children[0]];
+        cat.type = LIGHT_BLUE;
+        target.type = RED;
+        besides(s, cat, target, 2);
+        const evs = ticks(s, REVEAL + 5);
+        expect(s.contacts.has(pairKey(cat.id, target.id))).toBe(false);
+        expect(catEvents(evs, cat, target)).toHaveLength(0);
+        expect(target.spin).toBe(0);
+      },
+    ));
+
+  it('a part never catalyses a free thing of its size, either way round (organism in a herd, cell in an organism)', () =>
+    withSettings(
+      () => (DYNAMICS.catChance = ALWAYS),
+      () => {
+        for (const tier of [0, 1]) {
+          for (const partIsCatalyst of [true, false]) {
+            const s = smallWorld({ catalysis: true });
+            const part = s.entities.find((e) => e.alive && e.tier === tier && e.parent >= 0)!;
+            const free = s.entities.find((e) => e.alive && e.tier === tier && e.parent < 0 && e.bond < 0)!;
+            // its siblings neither catalyse nor are catalysed (purple), so any spin could only come from outside
+            for (const id of s.entities[part.parent].children) s.entities[id].type = 1;
+            part.type = partIsCatalyst ? LIGHT_BLUE : RED;
+            free.type = partIsCatalyst ? RED : LIGHT_BLUE;
+            besides(s, part, free, 1);
+            const evs = ticks(s, REVEAL + 5);
+            expect(s.contacts.has(pairKey(part.id, free.id))).toBe(false);
+            expect(catEvents(evs, part, free)).toHaveLength(0);
+            expect((partIsCatalyst ? free : part).spin).toBe(0);
+          }
+        }
+      },
+    ));
+
+  it('parts of the same whole still catalyse each other, and so do two free things', () =>
+    withSettings(
+      () => (DYNAMICS.catChance = ALWAYS),
+      () => {
+        const s = smallWorld({ catalysis: true });
+        const h = herdsOf(s)[0];
+        const [cat, target] = h.children.map((id) => s.entities[id]);
+        cat.type = LIGHT_BLUE;
+        target.type = RED;
+        target.x = cat.x + naturalRadius(s, cat) + naturalRadius(s, target) + 2;
+        target.y = cat.y;
+        ticks(s, 1);
+        expect(s.contacts.get(pairKey(cat.id, target.id))!.rules & RULE_CAT).toBe(RULE_CAT);
+        const t = smallWorld({ catalysis: true });
+        const [, tt] = meetPair(t, 1, LIGHT_BLUE, RED, 2);
+        ticks(t, REVEAL + 2);
+        expect(tt.spin).toBeCloseTo(DYNAMICS.catSpin[1], 6);
+      },
+    ));
+
+  it('an encounter rolled while both were free ends when one joins a whole: the spin stops', () =>
+    withSettings(
+      () => (DYNAMICS.catChance = ALWAYS),
+      () => {
+        const s = smallWorld({ catalysis: true });
+        const [cat, target] = meetPair(s, 0, LIGHT_BLUE, RED, 1);
+        ticks(s, REVEAL + 2);
+        expect(target.spin).toBeCloseTo(DYNAMICS.catSpin[0], 6);
+        const org = s.entities.find((e) => e.alive && e.tier === 1 && e.parent < 0 && e.children.length < band(s.config, 1)[1])!;
+        org.type = RED; // a red organism takes red cells
+        expect(canJoin(s, target.id, org.id)).toBe(true);
+        applyAction(s, { kind: 'join', id: target.id, parent: org.id });
+        besides(s, cat, target, 1); // the joined cell sits right next to the catalyst
+        ticks(s, 1);
+        expect(s.contacts.has(pairKey(cat.id, target.id))).toBe(false);
+        ticks(s, 150);
+        expect(target.spin).toBe(0);
+      },
+    ));
+});

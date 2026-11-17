@@ -909,6 +909,14 @@ function bind(s: WorldState, a: Entity, b: Entity): void {
   b.bondUntil = until;
 }
 
+/**
+ * Mechanisms act only within one scope: two parts of the same whole, or two free-standing things. A part never
+ * interacts with anything outside its whole (a loose thing, or a part of another whole).
+ */
+function sameScope(a: Entity, b: Entity): boolean {
+  return a.parent === b.parent;
+}
+
 /** Bonded to a thing of another size (only free-standing things bind across sizes). */
 function crossBonded(s: WorldState, e: Entity): boolean {
   return e.bond >= 0 && s.entities[e.bond].tier !== e.tier;
@@ -1294,6 +1302,11 @@ function advance(s: WorldState, events: SimEvent[]): void {
       continue;
     }
     if (a.parent >= 0 && a.parent === b.parent) continue; // siblings: one roll for as long as they share a parent
+    // one of them joined (or left) a whole: the encounter is over, so its effect stops and a later meeting rolls afresh
+    if (!sameScope(a, b)) {
+      s.contacts.delete(key);
+      continue;
+    }
     if (dhypot(b.x - a.x, b.y - a.y) - naturalRadius(s, a) - naturalRadius(s, b) > apartOf(a, b)) s.contacts.delete(key);
   }
 
@@ -1302,8 +1315,9 @@ function advance(s: WorldState, events: SimEvent[]): void {
 
   // 0c. encounters. Two things that come within range (gap < rangeMargin), also while one is dragged, roll once for
   // each rule that applies to them: lock & key if both are free and unbound lock-pair types, catalysis if one is the
-  // other's catalyst. The chance is that of their size pair (chanceOf). Same-size pairs first, every level; then
-  // different-size pairs of free-standing things. Ascending id order, so replays roll identically.
+  // other's catalyst. The chance is that of their size pair (chanceOf). Same-size pairs first, every level, only within
+  // one scope (two parts of the same whole, or two free things: sameScope); then different-size pairs of free-standing
+  // things. Ascending id order, so replays roll identically.
   const gapOf = (a: Entity, b: Entity) => dhypot(b.x - a.x, b.y - a.y) - rad[a.id] - rad[b.id];
   for (let t = 0; t < 3; t++) {
     const lockHere = lockOn(s.config, t);
@@ -1315,7 +1329,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
       for (let j = i + 1; j < list.length; j++) {
         const b = list[j];
         const lockPair = lockHere && a.parent < 0 && b.parent < 0 && a.bond < 0 && b.bond < 0 && isLockPair(a.type, b.type);
-        const catPair = catHere && (catalyses(a.type, b.type) || catalyses(b.type, a.type));
+        const catPair = catHere && sameScope(a, b) && (catalyses(a.type, b.type) || catalyses(b.type, a.type));
         if (!lockPair && !catPair) continue;
         const key = pairKey(a.id, b.id);
         if (s.contacts.has(key) || gapOf(a, b) >= DYNAMICS.rangeMargin[t]) continue;
@@ -1392,7 +1406,7 @@ function advance(s: WorldState, events: SimEvent[]): void {
       enc.done |= RULE_CAT;
       events.push({ kind: 'encounter', rule: 'catalysis', tier: t as Tier, tierB: b.tier, a: a.id, b: b.id, ok: (enc.ok & RULE_CAT) !== 0 && near });
     }
-    if (enc.done & RULE_CAT && enc.ok & RULE_CAT && near) {
+    if (enc.done & RULE_CAT && enc.ok & RULE_CAT && near && sameScope(a, b)) {
       if (catalyses(a.type, b.type)) catTouched[b.id] = 1;
       if (catalyses(b.type, a.type)) catTouched[a.id] = 1;
     }

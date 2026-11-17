@@ -458,7 +458,10 @@ describes same-size pairs; different-size pairs follow the same encounter rules.
 `rangeMargin` (10 / 20 / 60 units for cells / organisms / herds). The moment they come near, also while one of them is
 being dragged, the dice are rolled **once** for each rule that applies. They then have to **move apart** (gap above
 `apartMargin`: 20 / 40 / 120) and come near again before they can roll again; wiggling in between never re-rolls. Members of
-the same whole get one roll when they first become siblings. Rolls use the seeded random generator in a fixed order, so runs
+the same whole get one roll when they first become siblings. **Mechanisms stay inside their whole:** a part (a cell in a
+membrane, a membrane in a haze) interacts only with the other parts of the same whole, never with a loose thing or a part
+of another whole; loose things interact with loose things. An encounter between two loose things ends as soon as one of
+them joins something (a catalysed spin then stops). Rolls use the seeded random generator in a fixed order, so runs
 replay exactly. The chances depend on the `chance` condition (`graded` tables, `uniform` means, or `none`); a chance of `0`
 switches the rule off at that level.
 
