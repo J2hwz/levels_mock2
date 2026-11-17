@@ -49,7 +49,6 @@ export function run(cfg: Config): JsPsych {
           ${comp ? '<li><b>Click again</b> on the same spot to select something bigger that it is part of.</li>' : ''}
           <li><b>Esc</b> clears the selection.</li>
           <li><b>Scroll</b> to zoom. <b>Drag the background</b> to move around.</li>
-          <li>Use the <b>notepad</b> (bottom right) to write down anything you notice. You can show or hide it at any time.</li>
         </ul></div>`,
       `<div class="prose"><h2>Doing things</h2>
         <ul>
@@ -60,6 +59,12 @@ export function run(cfg: Config): JsPsych {
             what you are dragging joins, or combines with, whatever it is touching.</li>`
             : `<li><b>Shift + drag</b> a selected thing to pull it off whatever it is stuck to.</li>
           <li>Dropping things next to each other just lets them meet.</li>`}
+        </ul></div>`,
+      `<div class="prose"><h2>Your notepad</h2>
+        <ul>
+          <li>Use the <b>notepad</b> (bottom right) to write down anything you notice. You can show or hide it at any time.</li>
+          <li>When you answer the questions afterwards, <b>you won't be able to see the world any more, only your notes</b>.
+            So write down anything you want to remember.</li>
         </ul></div>`,
       `<div class="prose"><h2>Your first task</h2>
         <p>For about ${minutes} minute${minutes === 1 ? '' : 's'}, just <b>explore</b>. Watch, poke and try things out.

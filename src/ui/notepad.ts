@@ -53,6 +53,11 @@ export class Notepad {
     window.clearTimeout(this.timer);
   }
 
+  /** Show the notepad expanded (the report phase opens it for them). */
+  show(): void {
+    this.setOpen(true);
+  }
+
   private setOpen(open: boolean): void {
     if (open === this.open) return;
     if (!open) this.flush('hide');

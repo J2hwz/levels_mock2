@@ -64,8 +64,9 @@ export class InputController {
     on(window, 'keydown', (e) => this.onKey(e));
   }
 
+  /** Remove every listener (safe to call more than once). */
   dispose(): void {
-    for (const f of this.off) f();
+    for (const f of this.off.splice(0)) f();
   }
 
   /** Called once per frame before sim ticks: at most one dragMove action per frame. */

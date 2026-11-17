@@ -22,7 +22,7 @@ async function openSandbox(query) {
   page.on('pageerror', (e) => errors.push(`${query}: ${e.message}`));
   await page.goto(`${base}/${query}`);
   await page.getByRole('button', { name: 'Begin' }).click();
-  for (let i = 0; i < 3; i++) await page.locator('#jspsych-instructions-next').click();
+  for (let i = 0; i < 4; i++) await page.locator('#jspsych-instructions-next').click();
   await page.waitForSelector('canvas.world-canvas');
   return page;
 }
@@ -439,8 +439,14 @@ for (const hier of [1, 0]) {
   await page.locator('#notepad-hide').click();
   console.log('notepad typed; things alive before pressing I / after typing:', aliveBeforeI, aliveAfterTyping);
 
-  // phase 2: report. Step 1: open description only
+  // phase 2: report. The world is hidden and stopped; the notepad is shown open. Step 1: open description only
   await page.locator('#phase-skip').click();
+  await page.waitForTimeout(400);
+  const reportStart = await page.evaluate(() => ({
+    tick: window.__sandbox.state.tick,
+    canvasVisible: document.querySelector('canvas.world-canvas').offsetParent !== null,
+    notepadOpen: document.querySelector('#notepad').classList.contains('open'),
+  }));
   await page.locator('#report-describe').fill('There are coloured blobs made of little dots, and big hazes made of blobs. Purple and green stick together.');
   await page.locator('#report-describe').blur();
   await page.screenshot({ path: `${OUT}/runthrough_2_report_describe.png` });
@@ -462,18 +468,21 @@ for (const hier of [1, 0]) {
   await page.locator('#report-add-other').click();
   await page.locator('[data-rule="q3"] [data-field="text"]').fill('light blue things make red things spin');
   await page.locator('[data-rule="q3"] [data-field="text"]').blur();
-  await page.locator('#notepad-open').click();
+  // the notes are already open in the world's place: add a line, then hide and reopen them
   await page.locator('#notepad-text').press('End');
   await page.locator('#notepad-text').pressSequentially('\nthe hazes drift in circles');
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${OUT}/runthrough_3_report_rules.png` });
   await page.locator('#notepad-hide').click();
+  await page.locator('#notepad-open').click();
   await page.locator('#phase-continue').click(); // Next
 
   // step 3: open organisation question, then Finish
   await page.locator('#report-organise').fill('By size: dots, blobs and hazes; then by colour within each size.');
   await page.locator('#report-organise').blur();
   await page.screenshot({ path: `${OUT}/runthrough_4_report_organise.png` });
+  const reportEndTick = await page.evaluate(() => window.__sandbox.state.tick);
+  console.log('report: world canvas visible =', reportStart.canvasVisible, '| notepad open =', reportStart.notepadOpen, '| tick at start / before Finish =', reportStart.tick, reportEndTick);
   await page.locator('#phase-continue').click(); // Finish
 
   // generalisation: intro page, then two 1-minute tasks in an empty world. Drop the target pair from the palette
@@ -514,6 +523,9 @@ for (const hier of [1, 0]) {
     const final = log.events.find((e) => e.type === 'final_state');
     console.log('notepad events:', notes.join(' '), '| final notes:', JSON.stringify(final.payload.notes));
     console.log('final report:', JSON.stringify(final.payload.report));
+    const reportAt = log.events.findIndex((e) => e.type === 'phase' && e.payload.to === 'report');
+    const worldAfter = log.events.slice(reportAt).filter((e) => ['camera', 'hash', 'hover'].includes(e.type)).length;
+    console.log('camera/hash/hover events after the report started:', worldAfter);
     for (const g of log.generalisation ?? []) {
       const end = g.events.find((e) => e.type === 'task_end');
       console.log(`generalisation ${g.header.config.task}:`, JSON.stringify(end?.payload), 'spawns logged:', g.events.filter((e) => e.type === 'action' && e.payload.kind === 'spawn').length);

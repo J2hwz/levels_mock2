@@ -284,6 +284,54 @@
   font-size: 13px;
   line-height: 1.4;
 }
+/* report: the world is hidden; the questions take most of the screen and the notes a column on the right */
+.main.report-layout .side {
+  order: -1;
+  flex: 1;
+  width: auto;
+  border-left: none;
+  border-right: 1px solid var(--panel-2);
+  padding: 14px 20px;
+}
+.main.report-layout .side > .report {
+  max-width: 900px;
+  margin: 0 auto;
+}
+.stage.report-mode {
+  flex: 0 0 360px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+}
+.stage.report-mode .world-canvas,
+.stage.report-mode .inspect,
+.stage.report-mode .legend,
+.stage.report-mode .hud {
+  display: none;
+}
+.stage.report-mode .notepad {
+  position: static;
+}
+.stage.report-mode .notepad.open {
+  flex: 1;
+  width: auto;
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+}
+.stage.report-mode .notepad.open .notepad-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.stage.report-mode .notepad.open textarea {
+  flex: 1;
+  min-height: 0;
+  font-size: 14px;
+  resize: none;
+}
 .notepad .notepad-hide {
   font-size: 11px;
   color: var(--muted);

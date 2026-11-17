@@ -57,7 +57,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   const hud = h('pre', { class: 'hud' });
   const inspect = new InspectPanel();
   const banner = new PhaseBanner(cfg.debug);
-  const shell = h('div', { class: `sandbox skin-${cfg.skin}` }, banner.el, h('div', { class: 'main' }, stage, side));
+  const main = h('div', { class: 'main' }, stage, side);
+  const shell = h('div', { class: `sandbox skin-${cfg.skin}` }, banner.el, main);
   const legend = new ControlsLegend(cfg.debug, cfg.reveal, cfg.lock, cfg.composition, (open) => session.log('legend', { open }));
   // participant notes, available in every phase of the main sandbox (starts closed; bottom right of the world)
   const notepad = new Notepad(
@@ -195,6 +196,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     side.style.display = i > 0 ? '' : 'none';
     side.replaceChildren(...(i === 1 ? [report.el] : []));
     if (i === 1) {
+      enterReportMode();
       session.log('report', { op: 'step', step: report.step });
       showReportStep();
     } else {
@@ -202,6 +204,19 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     }
     saveBackup(session);
   };
+  /**
+   * Report: the world is hidden and stops (no ticks, no camera samples, no input); only the notes stay, shown open
+   * where the world was. Participants were told in the instructions that this would happen.
+   */
+  function enterReportMode(): void {
+    input.dispose();
+    window.clearInterval(camTimer);
+    selected = -1;
+    hovered = -1;
+    stage.classList.add('report-mode');
+    main.classList.add('report-layout'); // questions fill most of the screen; the notes are a column on the right
+    notepad.show();
+  }
   /** banner for the current report step: Next until the last step, then Finish */
   function showReportStep(): void {
     const last = report.step === REPORT.steps.length - 1;
@@ -223,6 +238,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
   const frame = () => {
     const dt = Math.min(renderer.app.ticker.deltaMS, 100);
     fps = fps * 0.95 + (1000 / Math.max(1, renderer.app.ticker.deltaMS)) * 0.05;
+    if (!task && phase === 1) return; // report: the world is hidden and stopped
     input.flush();
     acc += dt;
     let n = 0;

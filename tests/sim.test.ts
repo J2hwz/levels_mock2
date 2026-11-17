@@ -412,6 +412,28 @@ describe('composition=no (compose: false): parts exist but can never be used or 
   });
 });
 
+// ---------------------------------------------------------------- report: the world stops
+
+describe('report phase: the world stops while participants answer', () => {
+  it('a log whose world stops at the report start (answers and notes logged after) replays to that tick', () => {
+    const session = testSession('?seed=42');
+    const script = scriptedActions(session);
+    for (let t = 0; t < 200; t++) {
+      for (const a of script.get(session.state.tick) ?? []) session.act(a);
+      session.tick();
+    }
+    const reportTick = session.state.tick;
+    session.log('phase', { from: 'explore', to: 'report', index: 1 });
+    session.log('notepad_toggle', { open: true });
+    session.log('report', { op: 'answer', q: 'describe', from: '', to: 'blobs' });
+    session.log('notepad', { text: 'notes', reason: 'end' });
+    session.end();
+    const res = replay(JSON.parse(JSON.stringify(session.toJSON())));
+    expect(res.ok).toBe(true);
+    expect(res.finalTick).toBe(reportTick);
+  });
+});
+
 // ---------------------------------------------------------------- removed controls
 
 describe('removed controls (time speed, isolate)', () => {

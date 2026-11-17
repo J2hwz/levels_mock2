@@ -243,8 +243,9 @@ Tier names appear only with `debug=1`.
 ## Phases (inside `SandboxPlugin`)
 
 1. **Explore**: timed (6 min, or 60 s with `short=1`). The instructions never mention levels.
-2. **Report**: untimed, in a side panel next to the live world (participants can still poke things to check, and the
-   notepad stays available). Three steps in a fixed order; **Next** hides a step for good, so later steps can't
+2. **Report**: untimed. The **world is hidden and stopped** for the whole report: no ticks, no input, no camera
+   samples. The questions fill most of the screen, and the participant's **notepad is shown open** in a narrow column on
+   the right, where they can still read, edit, hide and reopen it. The notepad instructions say beforehand that only the notes will be available while answering. Three steps in a fixed order; **Next** hides a step for good, so later steps can't
    change earlier answers (and the structured step can't prime the open ones):
    1. *Describe the world* (open): "Suppose you are describing this world to another player who has never seen it.
       What would you tell them?" Nothing else is shown yet.
@@ -278,7 +279,7 @@ Tier names appear only with `debug=1`.
    Text, order, duration, drop limit and the target `{rule}` of each task are in `GEN` in
    `src/experiment/generalisation.ts` (`TUNE:`).
 
-jsPsych timeline: welcome → 3 instruction pages → sandbox (Explore + Report) → generalisation intro → task lock →
+jsPsych timeline: welcome → 4 instruction pages (looking around, doing things, your notepad, your first task) → sandbox (Explore + Report) → generalisation intro → task lock →
 task catalysis → end screen with a download button.
 
 ## Architecture
@@ -347,7 +348,7 @@ Task logs have the same event types, plus `task_success {task, tick, tiers}`, `t
 | `session_start` | `{hash}` of the generated world |
 | `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids}` (2+, dragged first), `swap{id}`, `spawn{tier, type, x, y}` (generalisation tasks: a dropped element). Coordinates are sim/world units |
 | `hover` | `{id}` on every hover-target change (`null` = nothing) |
-| `camera` | `{x, y, zoom}` every 250 ms |
+| `camera` | `{x, y, zoom}` every 250 ms during Explore and the tasks. None during the report: the world is hidden and stopped, so `hash`/`snapshot`/`hover` events also stop, and report events carry the frozen `t_tick`, plus `t_ms` |
 | `hash` | `{hash}` every 30 ticks (1 s of sim time) |
 | `snapshot` | full world (all live entities, every field) every 300 ticks (10 s of sim time), plus at start and end |
 | `organism_death` | `{id, cause: "health"\|"empty"\|"size", cells}` (`size`: it fell apart outside its size band) |
@@ -359,7 +360,7 @@ Task logs have the same event types, plus `task_success {task, tick, tiers}`, `t
 | `palette_order` | `{where: "report"\|"lock"\|"catalysis", order}`: the palette's pictures in display order, as token keys `"tier:type"` (random per palette, from the seed and `PALETTE_SALT` in `src/ui/tokens.ts`); logged when the palette is built |
 | `report` | `step{step}` (0 describe, 1 rules, 2 organise); `answer{q: "describe"\|"organise", from, to}`; `rule_add{id, kind: "interaction"\|"makeup"\|"other"}`; `rule_set{id, field, from, to}`; `rule_delete{id, rule}`. Tokens are `{tier, type}` (level and colour) |
 | `notepad` | `{text, reason: "pause"\|"hide"\|"end"}`: the full notepad text, when typing paused for 2 s, when it was hidden, or at the end (only if it changed since the last report) |
-| `notepad_toggle` | `{open}` when the notepad is shown/hidden |
+| `notepad_toggle` | `{open}` when the notepad is shown/hidden; one `{open: true}` when the report starts, as the notepad is opened for them |
 | `final_state` | `{report: {describe, rules, organise}, notes}` (`notes` = the notepad text). Rules: `{kind: "interaction", a, b, outcome}`, `{kind: "makeup", n, member, whole}`, `{kind: "other", text}` |
 | `session_end` | `{tick, hash}`, the hash the replay must reproduce |
 | `legend` | `{open}` when the controls legend is hidden/shown |
