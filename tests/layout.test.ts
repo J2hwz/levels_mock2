@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { actionableChain, computeLayout, hitChain, openRoots } from '../src/render/layout';
-import { createWorld } from '../src/sim/world';
+import { Camera } from '../src/render/camera';
+import { VIEW, clampCentre, clampToView, eventInView, overlapsView, viewCounts, viewRect, viewZoom } from '../src/render/view';
+import { P, createWorld } from '../src/sim/world';
 import { PALETTE_SALT, shuffledTokens } from '../src/ui/tokens';
 
 function pearson(xs: number[], ys: number[]): number {
@@ -97,5 +99,64 @@ describe('palette order (shuffledTokens)', () => {
     expect(first.size).toBe(12);
     for (const n of first.values()) expect(Math.abs(n / 1200 - 1 / 12)).toBeLessThan(0.04);
     expect(sizeSorted).toBeLessThan(5);
+  });
+});
+
+describe('viewing window (fixed size, arrow keys, look only outside)', () => {
+  it('the zoom is VIEW.zoom on a big stage and shrinks only so the window fits a small one', () => {
+    expect(viewZoom(4000, 3000)).toBe(VIEW.zoom);
+    const small = viewZoom(600, 400);
+    expect(small).toBeLessThan(VIEW.zoom);
+    expect(VIEW.w * small).toBeLessThanOrEqual(600 - 2 * VIEW.margin + 1e-9);
+    expect(VIEW.h * small).toBeLessThanOrEqual(400 - 2 * VIEW.margin + 1e-9);
+  });
+
+  it('the window never leaves the world', () => {
+    for (const [x, y] of [[-500, -500], [P.worldW + 900, 50], [P.worldW / 2, P.worldH * 3]]) {
+      const r = viewRect(...clampCentre(x, y));
+      expect(r.x).toBeGreaterThanOrEqual(0);
+      expect(r.y).toBeGreaterThanOrEqual(0);
+      expect(r.x + r.w).toBeLessThanOrEqual(P.worldW);
+      expect(r.y + r.h).toBeLessThanOrEqual(P.worldH);
+    }
+    const cam = new Camera();
+    cam.setView(1400, 900);
+    cam.moveBy(-1e4, 1e4);
+    expect(cam.state()).toMatchObject({ x: 0, y: P.worldH - VIEW.h, w: VIEW.w, h: VIEW.h });
+    expect(cam.zoom).toBe(VIEW.zoom);
+  });
+
+  it('circle overlap and clamping at the window edges', () => {
+    const r = { x: 100, y: 100, w: 200, h: 100 };
+    expect(overlapsView(r, 150, 150, 1)).toBe(true); // inside
+    expect(overlapsView(r, 95, 150, 6)).toBe(true); // straddles the left edge
+    expect(overlapsView(r, 90, 150, 6)).toBe(false); // just outside
+    expect(overlapsView(r, 96, 96, 6)).toBe(true); // near the corner: 5.66 from it
+    expect(overlapsView(r, 95, 95, 6)).toBe(false); // 7.07 from the corner
+    expect(clampToView(r, 0, 500)).toEqual([100, 200]);
+  });
+
+  it('events are in view when any thing they involve overlaps the window', () => {
+    const s = createWorld({ hier: false, eps: 0, seed: 3 });
+    const layout = computeLayout(s);
+    const cells = s.entities.filter((e) => e.alive);
+    const r = viewRect(...clampCentre(P.worldW / 2, P.worldH / 2));
+    const inside = cells.find((e) => e.x > r.x + 50 && e.x < r.x + r.w - 50 && e.y > r.y + 50 && e.y < r.y + r.h - 50)!;
+    const far = cells.filter((e) => e.x < r.x - 100 || e.x > r.x + r.w + 100);
+    const enc = (a: number, b: number) => ({ kind: 'encounter' as const, rule: 'lock' as const, tier: 0 as const, tierB: 0 as const, a, b, ok: true });
+    expect(eventInView(s, layout, enc(inside.id, far[0].id), r)).toBe(true);
+    expect(eventInView(s, layout, enc(far[0].id, far[1].id), r)).toBe(false);
+    expect(eventInView(s, layout, { kind: 'removed', id: far[0].id, tier: 0, ids: [far[0].id, inside.id] }, r)).toBe(true);
+  });
+
+  it('per-window counts match a hand count by level and colour', () => {
+    const s = createWorld({ hier: true, eps: 0.05, seed: 42 });
+    const layout = computeLayout(s);
+    const r = viewRect(...clampCentre(700, 600));
+    const counts = viewCounts(s, layout, r);
+    const hand = [0, 1, 2].map((t) => [0, 1, 2, 3].map((k) =>
+      s.entities.filter((e) => e.alive && e.tier === t && e.type === k && layout[e.id]!.x >= r.x && layout[e.id]!.x <= r.x + r.w && layout[e.id]!.y >= r.y && layout[e.id]!.y <= r.y + r.h).length));
+    expect(counts).toEqual(hand);
+    expect(counts.flat().reduce((a, b) => a + b, 0)).toBeGreaterThan(0);
   });
 });

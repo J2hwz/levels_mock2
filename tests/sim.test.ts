@@ -414,6 +414,29 @@ describe('composition=no (compose: false): parts exist but can never be used or 
   });
 });
 
+// ---------------------------------------------------------------- viewing window annotations
+
+describe('viewing window: sim events are tagged inView, and the log still replays', () => {
+  it('annotate adds its fields to every logged sim event; replay ignores them', () => {
+    const session = testSession('?seed=42');
+    let calls = 0;
+    session.annotate = () => ({ inView: ++calls % 2 === 0 });
+    const script = scriptedActions(session);
+    for (let t = 0; t < 400; t++) {
+      for (const a of script.get(session.state.tick) ?? []) session.act(a);
+      session.tick();
+    }
+    session.end();
+    const log = JSON.parse(JSON.stringify(session.toJSON()));
+    const simKinds = new Set(['organism_death', 'herd_dissolved', 'region_depleted', 'swapped', 'founded', 'encounter', 'removed']);
+    const sim = log.events.filter((e: { type: string }) => simKinds.has(e.type));
+    expect(sim.length).toBe(calls);
+    expect(sim.length).toBeGreaterThan(0);
+    expect(sim.every((e: { payload: { inView?: unknown } }) => typeof e.payload.inView === 'boolean')).toBe(true);
+    expect(replay(log).ok).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------- report: the world stops
 
 describe('report phase: the world stops while participants answer', () => {
@@ -588,7 +611,7 @@ describe('lock & key (purple + green, every level, chance per encounter)', () =>
         expect(a.bond).toBe(b.id);
         expect(b.bond).toBe(a.id);
         ticks(s, 120);
-        expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeLessThan(14); // held touching through drift
+        expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeLessThan(2 * P.cellR + 2); // held touching through drift
         const [bx, by] = [b.x, b.y];
         applyAction(s, { kind: 'dragStart', id: a.id, x: a.x + 100, y: a.y + 40 });
         expect(b.x - bx).toBeCloseTo(100, 6);

@@ -258,6 +258,32 @@
   border-radius: 4px;
 }
 
+/* viewing window: the surround is blurred and dimmed (VIEW.peek in src/render/view.ts) and takes the pointer, so
+   only the window can be touched. Panels (legend, notepad, add strip, inspect, HUD) sit above it. */
+.view-mask {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.view-side {
+  position: absolute;
+  pointer-events: auto;
+}
+.view-frame {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--fg) 35%, transparent);
+  pointer-events: none;
+}
+.stage > .inspect,
+.stage > .legend,
+.stage > .notepad,
+.stage > .add-strip,
+.stage > .hud {
+  z-index: 2;
+}
+
 /* participant notepad: bottom right of the world, shown / hidden like the controls legend */
 .notepad {
   position: absolute;
@@ -266,7 +292,7 @@
   font-size: 12px;
 }
 .notepad.open {
-  width: 300px;
+  width: 360px;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   border: 1px solid var(--panel-2);
   border-radius: 6px;
@@ -280,8 +306,8 @@
   flex: 1;
 }
 .notepad textarea {
-  min-height: 150px;
-  font-size: 13px;
+  min-height: 200px;
+  font-size: 14px;
   line-height: 1.4;
 }
 /* report: the world is hidden; the questions take most of the screen and the notes a column on the right */
@@ -305,6 +331,7 @@
   padding: 10px;
 }
 .stage.report-mode .world-canvas,
+.stage.report-mode .view-mask,
 .stage.report-mode .inspect,
 .stage.report-mode .add-strip,
 .stage.report-mode .legend,

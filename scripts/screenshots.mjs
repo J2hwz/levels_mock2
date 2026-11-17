@@ -53,14 +53,13 @@ for (const [name, q0] of [['hier1_composition_yes', 'hier=1&composition=yes'], [
   await page.screenshot({ path: file });
   const strip = await page.locator('#add-strip .token').evaluateAll((els) => els.map((e) => e.dataset.token).join(' '));
   console.log(`${file}: cells=${c} organisms=${o} herds=${h} | add strip: ${strip}`);
-  // zoomed view on the first herd (or the centre in flat), with the pointer hovering it: composition=no shows nothing inside
+  // view centred on the first herd (or the centre in flat), with the pointer hovering it: composition=no shows nothing inside
   const centre = await page.evaluate(() => {
     const sb = window.__sandbox;
     const herd = sb.state.entities.find((e) => e.alive && e.tier === 2);
     const n = herd ? sb.layout()[herd.id] : { x: 1200, y: 800 };
     sb.camera.x = n.x;
     sb.camera.y = n.y;
-    sb.camera.zoom = herd ? Math.min(6, 300 / Math.max(n.r, 20)) : 1.6;
     return herd ? herd.id : -1;
   });
   await page.waitForTimeout(300);
@@ -69,7 +68,7 @@ for (const [name, q0] of [['hier1_composition_yes', 'hier=1&composition=yes'], [
     await page.mouse.move(x, y);
   }
   await page.waitForTimeout(300);
-  await page.screenshot({ path: `${OUT}/${name}_zoom_hover.png` });
+  await page.screenshot({ path: `${OUT}/${name}_hover.png` });
   await page.close();
 }
 
@@ -92,8 +91,7 @@ for (const hier of [1, 0]) {
     const org = s.entities.find((e) => e.alive && e.tier === 1 && e.parent < 0 && e.type === 3);
     const cells = s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0 && e.type === 1);
     const cell = cells.reduce((best, c) => (Math.hypot(c.x - org.x, c.y - org.y) < Math.hypot(best.x - org.x, best.y - org.y) ? c : best));
-    const d = Math.hypot(cell.x - org.x, cell.y - org.y);
-    Object.assign(window.__sandbox.camera, { x: (org.x + cell.x) / 2, y: (org.y + cell.y) / 2, zoom: Math.min(3, 500 / Math.max(d, 1)) });
+    Object.assign(window.__sandbox.camera, { x: (org.x + cell.x) / 2, y: (org.y + cell.y) / 2 });
     return { org: org.id, cell: cell.id };
   });
   await page.waitForTimeout(200);
@@ -141,8 +139,8 @@ for (const hier of [1, 0]) {
   await page.waitForTimeout(3000);
   await page.screenshot({ path: `${OUT}/hier1_dynamics.png` });
 
-  /** centre the camera on a world point */
-  const look = (x, y, zoom) => page.evaluate(([x, y, zoom]) => Object.assign(window.__sandbox.camera, { x, y, zoom }), [x, y, zoom]);
+  /** centre the viewing window on a world point (the zoom is fixed; the camera keeps the window inside the world) */
+  const look = (x, y) => page.evaluate(([x, y]) => window.__sandbox.camera.moveBy(x - window.__sandbox.camera.x, y - window.__sandbox.camera.y), [x, y]);
   /** drag entity `id` (already selected) so its centre lands on world point (wx, wy); press C before letting go if asked */
   const dragTo = async (id, wx, wy, pressC = false) => {
     const [x, y] = await screenPos(page, id);
@@ -175,12 +173,12 @@ for (const hier of [1, 0]) {
     return { org: org && { id: org.id, x: org.x, y: org.y }, herd: herd && { id: herd.id, x: herd.x, y: herd.y, spin: herd.children.map((c) => s.entities[c].spin.toFixed(2)) } };
   });
   if (inside.org) {
-    await look(inside.org.x, inside.org.y, 7);
+    await look(inside.org.x, inside.org.y);
     await page.waitForTimeout(250);
     await page.screenshot({ path: `${OUT}/mech_lock_inside_organism.png` });
   }
   if (inside.herd) {
-    await look(inside.herd.x, inside.herd.y, 2.6);
+    await look(inside.herd.x, inside.herd.y);
     await page.waitForTimeout(700);
     await page.screenshot({ path: `${OUT}/mech_catalysis_in_herd.png` });
   }
@@ -201,7 +199,7 @@ for (const hier of [1, 0]) {
   });
   let A = await ent(pair.a);
   let B = await ent(pair.b);
-  await look((A.x + B.x) / 2, (A.y + B.y) / 2, Math.min(5, 500 / Math.max(pair.d, 50)));
+  await look((A.x + B.x) / 2, (A.y + B.y) / 2);
   await page.waitForTimeout(200);
   const [ax, ay] = await screenPos(page, pair.a);
   await page.mouse.click(ax, ay);
@@ -233,13 +231,28 @@ for (const hier of [1, 0]) {
   if (orgs) {
     const T = await ent(orgs.tgt);
     const Cg = await ent(orgs.cat);
-    // frame both organisms so the catalyst can be clicked
-    // keep both well inside the canvas (clear of the banner and the controls legend)
-    await look((T.x + Cg.x) / 2, (T.y + Cg.y) / 2, Math.min(2.5, 550 / Math.max(Math.hypot(T.x - Cg.x, T.y - Cg.y), 1)));
+    // only the viewing window can be touched and it is smaller than the gap between them: centre the window on the
+    // catalyst and select it, then carry it towards the target in short hops, re-centring the window each time
+    await look(Cg.x, Cg.y);
     await page.waitForTimeout(200);
     const [cx, cy] = await screenPos(page, orgs.cat);
     // select the catalyst organism: its centre has no cell on it, so one click selects the organism itself
     await page.mouse.click(cx, cy);
+    for (let hop = 0; hop < 10; hop++) {
+      const C = await ent(orgs.cat);
+      const Tn = await ent(orgs.tgt);
+      const d = Math.hypot(Tn.x - C.x, Tn.y - C.y);
+      if (d < 250) break;
+      await look(C.x, C.y);
+      await page.waitForTimeout(100);
+      await dragTo(orgs.cat, C.x + ((Tn.x - C.x) * 200) / d, C.y + ((Tn.y - C.y) * 200) / d);
+    }
+    {
+      const C = await ent(orgs.cat);
+      const Tn = await ent(orgs.tgt);
+      await look((C.x + Tn.x) / 2, (C.y + Tn.y) / 2);
+      await page.waitForTimeout(150);
+    }
     const rT = await page.evaluate(({ c, t }) => {
       const s = window.__sandbox.state;
       const r = (e) => 6 + 2.4 * e.children.length + 9;
@@ -282,7 +295,7 @@ for (const hier of [1, 0]) {
     return { x: e.x, y: e.y, r: window.__sandbox.layout()[id].r };
   }, hc.herd);
   const C0 = await ent(hc.cell);
-  await look((H.x + C0.x) / 2, (H.y + C0.y) / 2, 1.5);
+  await look((H.x + C0.x) / 2, (H.y + C0.y) / 2);
   await page.waitForTimeout(200);
   const [hx, hy] = await screenPos(page, hc.cell);
   await page.mouse.click(hx, hy);
@@ -294,7 +307,7 @@ for (const hier of [1, 0]) {
     return { x: e.x, y: e.y, r: window.__sandbox.layout()[id].r };
   }, hc.herd);
   console.log(`cell #${hc.cell} dropped inside herd #${hc.herd}: now ${(Math.hypot(C1.x - Hn.x, C1.y - Hn.y) - Hn.r).toFixed(1)} units outside its edge`);
-  await look(C1.x, C1.y, 2.5);
+  await look(C1.x, C1.y);
   await page.waitForTimeout(250);
   await page.screenshot({ path: `${OUT}/mech_collision_herd_edge.png` });
   await page.close();
@@ -304,7 +317,7 @@ for (const hier of [1, 0]) {
 {
   const page = await openSandbox('?hier=1&seed=7&debug=1&short=1&cross=0&move=0');
   await page.waitForTimeout(1000);
-  // zoom onto a herd
+  // centre the window on a herd
   const ids = await page.evaluate(() => {
     const sb = window.__sandbox;
     const s = sb.state;
@@ -313,7 +326,6 @@ for (const hier of [1, 0]) {
     // centre on the organism (not the herd), so the controls legend never covers it
     sb.camera.x = org.x;
     sb.camera.y = org.y;
-    sb.camera.zoom = 2.2;
     return { herd: herd.id, org: org.id, cell: org.children[0], cell2: org.children[1] };
   });
   await page.waitForTimeout(200);
@@ -344,9 +356,16 @@ for (const hier of [1, 0]) {
   await page.waitForTimeout(800);
 
   // shift-drag a cell out of its organism
-  [x, y] = await screenPos(page, ids.cell2);
+  // at the fixed zoom a cell is only ~12 px across and drifts inside its organism: read its position right before
+  // each press, and retry the click until the cell itself is selected
   await page.keyboard.press('Escape');
-  await page.mouse.click(x, y);
+  for (let i = 0; i < 5; i++) {
+    [x, y] = await screenPos(page, ids.cell2);
+    await page.mouse.click(x, y);
+    if ((await sel()).includes(`id ${ids.cell2} `)) break;
+    await page.keyboard.press('Escape');
+  }
+  [x, y] = await screenPos(page, ids.cell2);
   await page.keyboard.down('Shift');
   await page.mouse.move(x, y);
   await page.mouse.down();
@@ -403,7 +422,6 @@ for (const hier of [1, 0]) {
     }
     sb.camera.x = best.mx;
     sb.camera.y = best.my;
-    sb.camera.zoom = Math.min(3, 600 / Math.max(best.d, 50));
     return best;
   });
   await page.waitForTimeout(200);
@@ -442,17 +460,28 @@ for (const hier of [1, 0]) {
   }
   console.log('add from strip ->', JSON.stringify(added), '| deleted with Delete key:', deleted);
 
-  // wheel zoom, pan; I does nothing any more (no isolation)
+  // viewing window: the wheel doesn't zoom, a click in the blurred surround selects nothing, the arrow keys scroll
+  const camBefore = await page.evaluate(() => ({ ...window.__sandbox.camera.state(), zoom: window.__sandbox.camera.zoom }));
+  await page.mouse.move(700, 450);
+  await page.mouse.wheel(0, 300);
+  await page.mouse.click(40, 860); // bottom left: outside the window
+  await page.waitForTimeout(150);
+  const afterWheel = await page.evaluate(() => ({ zoom: window.__sandbox.camera.zoom }));
+  const selOutside = await page.locator('.inspect', { hasText: 'id ' }).count();
+  await page.screenshot({ path: `${OUT}/runthrough_1a_window.png` });
+  await page.keyboard.down('ArrowLeft');
+  await page.keyboard.down('ArrowUp');
+  await page.waitForTimeout(500);
+  await page.keyboard.up('ArrowLeft');
+  await page.keyboard.up('ArrowUp');
+  const camAfter = await page.evaluate(() => window.__sandbox.camera.state());
+  console.log('window: zoom before / after wheel', camBefore.zoom, afterWheel.zoom, '| selected after clicking outside:', selOutside,
+    '| window before / after arrows', JSON.stringify(camBefore), JSON.stringify(camAfter));
+  // I does nothing any more (no isolation)
   const aliveBeforeI = await page.evaluate(() => window.__sandbox.state.entities.filter((e) => e.alive).length);
   await page.keyboard.press('i');
   await page.waitForTimeout(300);
   console.log('time buttons present:', await page.locator('[data-speed]').count(), '| Controls rows mentioning freeze:', await page.locator('#controls-legend', { hasText: 'freeze' }).count());
-  await page.mouse.move(700, 450);
-  await page.mouse.wheel(0, 300);
-  await page.mouse.move(100, 120);
-  await page.mouse.down();
-  await page.mouse.move(160, 170, { steps: 5 });
-  await page.mouse.up();
   await page.screenshot({ path: `${OUT}/runthrough_1_explore.png` });
 
   // notepad: open it, type (the letter c must not combine), pause so it is logged, hide it
@@ -534,8 +563,8 @@ for (const hier of [1, 0]) {
     if (ok) await page.locator('#phase-continue').click();
     else await page.locator('#phase-skip').click();
   };
-  await doTask('lock', '0:1', '0:3', 22, 'runthrough_5_task_lock.png'); // purple + green cells (zoom 2: 11 world units apart)
-  await doTask('catalysis', '1:0', '1:2', 124, 'runthrough_6_task_catalysis.png'); // light blue + red organisms
+  await doTask('lock', '0:1', '0:3', 10, 'runthrough_5_task_lock.png'); // purple + green cells (zoom 0.85: ~12 world units apart)
+  await doTask('catalysis', '1:0', '1:2', 53, 'runthrough_6_task_catalysis.png'); // light blue + red organisms
 
   // end screen: download
   const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#download-data').click()]);
@@ -550,8 +579,13 @@ for (const hier of [1, 0]) {
     console.log('notepad events:', notes.join(' '), '| final notes:', JSON.stringify(final.payload.notes));
     console.log('final report:', JSON.stringify(final.payload.report));
     const reportAt = log.events.findIndex((e) => e.type === 'phase' && e.payload.to === 'report');
-    const worldAfter = log.events.slice(reportAt).filter((e) => ['camera', 'hash', 'hover'].includes(e.type)).length;
-    console.log('camera/hash/hover events after the report started:', worldAfter);
+    const worldAfter = log.events.slice(reportAt).filter((e) => ['view', 'view_stats', 'hash', 'hover'].includes(e.type)).length;
+    console.log('view/view_stats/hash/hover events after the report started:', worldAfter);
+    const count = (t) => log.events.filter((e) => e.type === t).length;
+    const tagged = log.events.filter((e) => typeof e.payload?.inView === 'boolean');
+    console.log('window log: view', count('view'), '| view_setup', count('view_setup'), '| view_key', count('view_key'), '| view_stats', count('view_stats'),
+      '| camera (should be 0)', count('camera'), '| sim events tagged inView', tagged.length, `(${tagged.filter((e) => e.payload.inView).length} in view)`);
+    console.log('first view_setup:', JSON.stringify(log.events.find((e) => e.type === 'view_setup')?.payload), '| a view_stats:', JSON.stringify(log.events.find((e) => e.type === 'view_stats')?.payload));
     for (const g of log.generalisation ?? []) {
       const end = g.events.find((e) => e.type === 'task_end');
       console.log(`generalisation ${g.header.config.task}:`, JSON.stringify(end?.payload), 'spawns logged:', g.events.filter((e) => e.type === 'action' && e.payload.kind === 'spawn').length);

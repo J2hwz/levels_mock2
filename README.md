@@ -47,9 +47,9 @@ download to the participant's own computer; nothing is sent anywhere.
 | `similar` | levels                  | none       | similarity ("birds of a feather") at these levels |
 | `org`   | `min-unstable`            | `4-6`      | membrane size band: stable (optimal) with 4–5 cells, drains below 4 or at 6+ |
 | `herd`  | `min-unstable`            | `3-5`      | haze size band: stable (optimal) with 3–4 membranes, drains below 3 or at 5+ |
-| `free`  | 0..600                    | `140`      | number of loose cells floating around at the start |
-| `herds` | 0..12                     | `7`        | number of herds (hazes) at the start |
-| `lone`  | 0..40                     | `18`       | number of lone organisms (membranes) at the start |
+| `free`  | 0..600                    | `170`      | number of loose cells floating around at the start |
+| `herds` | 0..12                     | `8`        | number of herds (hazes) at the start |
+| `lone`  | 0..40                     | `22`       | number of lone organisms (membranes) at the start |
 | `same`  | `0` \| `1`                | `0`        | `0`: same-colour cells never attract each other through the laws (same-colour repulsion and all other laws stay). `1`: the seed decides, as before |
 | `chance` | `graded` \| `uniform` \| `none` | `graded` | how likely lock & key and catalysis are per encounter. **condition (skew).** `graded`: the per-level tables `DYNAMICS.lockChance` / `catChance` (lock 90 / 50 / 10 %, catalysis 50 / 90 / 10 % for cells / organisms / herds). `uniform`: the mean of each table for every size and size pair (both 50 %). The chance of each size pair then follows `cross` (see "Size-pair chances"). `none`: 0 everywhere, no interactions at all, so composition is the only mechanism (also no pre-binding pull or bound-cell push). Laws and similarity are separate switches. Only used with `pairs=rule` |
 | `cross` | 0..1                      | drawn from the seed | **condition (who interacts), w.** 0 = only same-size pairs interact (cell–cell, organism–organism, herd–herd); ½ = every size pair at its full chance; 1 = only different-size pairs (cell–organism, cell–herd, organism–herd). Without `cross=` each participant gets w drawn uniformly in [0, 1) from their seed (`crossFromSeed` in `src/config.ts`; `DEFAULTS.cross` can fix it for everyone). Recorded in the header as `cross`. See "Size-pair chances". The chances use it only with `pairs=rule` |
@@ -245,7 +245,7 @@ similarRepel: [false, true, true],
 
 | input | effect |
 |---|---|
-| hover | highlight the deepest thing under the cursor; with `reveal=1` this also opens the thing it sits in to show everything inside |
+| hover | (inside the viewing window only) highlight the deepest thing under the cursor; with `reveal=1` this also opens the thing it sits in to show everything inside |
 | click | select it; **click again on the same spot** → its parent (cell → organism → herd → back to cell) |
 | Esc / click empty space | clear selection |
 | drag the selected thing (or any part of it) | move it with all its parts (and its lock & key partner) |
@@ -254,7 +254,7 @@ similarRepel: [false, true, true],
 | C while dragging | join the compatible parent it touches, else combine it with every loose same-level thing touching it into a new parent one level up (2+ cells → organism, 2+ organisms → herd, if the grammar allows); the drag continues with the result |
 | drag a picture from the add strip onto the world | add that element there (Explore; `spawn` action). The strip sits at the bottom of the world. composition=yes and the flat world: the 4 cells only, so anything bigger must be built by hand. composition=no: all 12 elements, cells, membranes and hazes (they arrive whole, made of their recipe-0 parts). No limit. The pictures are in a random order from the seed (`palette_order` `where: "explore"`) |
 | Delete (or Backspace) | remove the selected thing and everything inside it (`remove` action). A selected part leaves its whole, which may then drain; the last part takes its empty whole with it. composition=no: only whole things can be selected, so a membrane or haze goes with its hidden parts. Also works in the generalisation tasks (it does not give back a drop) |
-| wheel / drag background | zoom / pan |
+| ← ↑ → ↓ (arrow keys) | scroll the world under the viewing window (see "Viewing window"). There is no zoom, and dragging the background does nothing |
 | S (debug only) | `swapRealisation` on the selection |
 
 A **controls legend** (top right of the world) lists all of these throughout the sandbox, so participants
@@ -271,10 +271,42 @@ instruction page mentions it. Code: `src/ui/notepad.ts`.
 The inspect panel (bottom left: colour, size, speed, number of visible parts, and id / tier / type / health) is shown
 only with `debug=1`. Participants see only the selection ring.
 
+## Viewing window
+
+Participants see the world through a **fixed-size window** in the middle of the stage. Everything around it is blurred
+and dimmed but still faintly visible. The **arrow keys** scroll the world under the window, and the window never leaves
+the world. There is no zoom. Every participant sees the same patch of world (940 × 624 world units, about 40 % of the
+world each way) at the same on-screen size (0.85 px per world unit, so about 800 × 530 px), whatever their screen: a bigger screen only shows more
+blurred surround. On a screen too small for it, the window shrinks just enough to fit; the actual zoom is logged in
+`view_setup`.
+
+Outside the window is **look only**: nothing there can be hovered, clicked or dropped on, and a dragged thing's centre
+can't leave the window. It applies in Explore and in both generalisation tasks (each starts with the window at the world
+centre); during the report the world is hidden anyway.
+
+**Where to change it:** `VIEW` in `src/render/view.ts` (each line is marked `// TUNE:`):
+
+| setting | default | what it does |
+|---|---|---|
+| `peek` | `0.3` | **how visible the blurred surround is**, 0..1: 0 = hidden entirely, 1 = no blur or dimming (still look-only). The blur is `blurPx · (1 − peek)` and the dimming `1 − peek` |
+| `blurPx` | `10` | blur at `peek` 0, screen px |
+| `w`, `h` | `940`, `624` | window size, world units (the world is 2400 × 1600) |
+| `zoom` | `0.85` | screen px per world unit at full size (so the window is about 800 × 530 px) |
+| `margin` | `24` | least blurred surround on each side before the window shrinks to fit, px |
+| `speed` | `450` | arrow-key scroll speed, world units per second |
+
+These are not URL parameters; the values in use are recorded in each log (`view_setup`). Code: `src/render/view.ts`
+(pure window maths, unit-tested), `src/render/viewMask.ts` (the blurred panels), `src/render/camera.ts`.
+
+**What is logged about the window** (see "Data format"): its position (`view`, every 250 ms), its on-screen size
+(`view_setup`), arrow-key presses (`view_key`), whether each world event happened in it (`inView` on every sim event),
+and a per-second summary (`view_stats`: what is in the window by size and colour, and how many events happened in it vs
+elsewhere). The window is not world state, so it doesn't affect replay: old and new data files replay the same.
+
 ## Phases (inside `SandboxPlugin`)
 
 1. **Explore**: timed (6 min, or 60 s with `short=1`). The instructions never mention levels.
-2. **Report**: untimed. The **world is hidden and stopped** for the whole report: no ticks, no input, no camera
+2. **Report**: untimed. The **world is hidden and stopped** for the whole report: no ticks, no input, no `view`
    samples. The questions fill most of the screen, and the participant's **notepad is shown open** in a narrow column on
    the right, where they can still read, edit, hide and reopen it. The notepad instructions say beforehand that only the notes will be available while answering. Three steps in a fixed order; **Next** hides a step for good, so later steps can't
    change earlier answers (and the structured step can't prime the open ones):
@@ -323,7 +355,7 @@ src/
     dmath.ts       cross-engine deterministic sin/cos/hypot (see "Determinism")
     world.ts       entity types, grammar + generation, applyAction, step
     hash.ts        64-bit FNV-style hash of the exact float64 state
-  render/          Pixi renderer, camera, skins, pure layout/hit-testing, pointer→Action input
+  render/          Pixi renderer, camera + viewing window (view.ts, viewMask.ts), skins, pure layout/hit-testing, pointer→Action input
   log/             logger (event stream) + Session (world + log; used by the app and by tests)
   ui/              report (questions), picture tokens (tokens.ts), notepad, inspect panel, controls legend, phase banner
   experiment/      jsPsych timeline, SandboxPlugin, sandbox app loop (main + task mode), generalisation.ts (GEN), download/backup
@@ -379,7 +411,11 @@ Task logs have the same event types, plus `task_success {task, tick, tiers}`, `t
 | `session_start` | `{hash}` of the generated world |
 | `action` | an `Action`: `select{id}`, `dragStart{id,x,y}`, `dragMove{id,x,y}`, `dragEnd{id}`, `detach{id}`, `join{id,parent}`, `combine{ids}` (2+, dragged first), `swap{id}`, `spawn{tier, type, x, y}` (a picture dropped onto the world, in Explore or a generalisation task), `remove{id}` (Delete: the selected thing and everything inside it). Coordinates are sim/world units |
 | `hover` | `{id}` on every hover-target change (`null` = nothing) |
-| `camera` | `{x, y, zoom}` every 250 ms during Explore and the tasks. None during the report: the world is hidden and stopped, so `hash`/`snapshot`/`hover` events also stop, and report events carry the frozen `t_tick`, plus `t_ms` |
+| `view` | `{x, y, w, h}`: the viewing window (top-left corner and size, world units), at the start and every 250 ms during Explore and the tasks. None during the report: the world is hidden and stopped, so `view_stats`/`hash`/`snapshot`/`hover` events also stop, and report events carry the frozen `t_tick`, plus `t_ms`. (Files from before the viewing window have `camera {x, y, zoom}` instead, with x, y the centre) |
+| `view_setup` | `{w, h, zoom, peek, stage_w, stage_h}`: the window size (world units), the zoom actually used (px per world unit; below `VIEW.zoom` only on a small screen), `VIEW.peek`, and the stage size in px. At the start and whenever the stage is resized |
+| `view_key` | `{key, down}`: an arrow key pressed (`down: true`) or released |
+| `view_stats` | every 30 ticks (1 s of sim time, alongside `hash`): `{x, y, w, h, counts, events_in, events_out}`. `counts` = alive things whose centre is in the window, `[cells[4], organisms[4], herds[4]]` by colour (0 light blue, 1 purple, 2 red, 3 green; parts inside wholes count too); `events_in` / `events_out` = sim events in that second that did / didn't happen in the window |
+| `inView` (field) | on every sim event (`encounter`, `founded`, `organism_death`, `herd_dissolved`, `removed`, `swapped`, `region_depleted`): true if any thing it involves (its drawn circle) overlaps the window at that moment. Actions need no flag: they can only happen inside the window |
 | `hash` | `{hash}` every 30 ticks (1 s of sim time) |
 | `snapshot` | full world (all live entities, every field) every 300 ticks (10 s of sim time), plus at start and end |
 | `organism_death` | `{id, cause: "health"\|"empty"\|"size", cells}` (`size`: it fell apart outside its size band) |
@@ -418,14 +454,14 @@ invalidates old logs:** re-run `npm run screenshots` to refresh the fixture.
 Where the brief left something open, I chose the following.
 
 **World**
-- World is 2400 × 1600 units with soft walls. The camera starts fitted to the whole world.
-- **Sizes** (physical: what you see is what collides and what you click). Cells have radius 6 (`P.cellR`; cell contact,
+- World is 2400 × 1600 units with soft walls. Participants see it through the viewing window (see "Viewing window"), which starts at the world centre.
+- **Sizes** (physical: what you see is what collides and what you click). Cells have radius 7 (`P.cellR`; cell contact,
   reach and stress radii scale with it). Organisms hold their cells on a ring of `6 + 2.4n`. Herds hold their organisms on
-  a ring of `16 + 11n` with a padding of 4, so a 4-organism herd has radius ~92 (it was ~121); herds touch at `P.rmin[2]` = 180.
+  a ring of `16 + 11n` with a padding of 4, so a 4-organism herd has radius ~93 (with 5-cell organisms); herds touch at `P.rmin[2]` = 180.
   Herds are drawn with a **double border** (outer ring plus a thinner inner ring). Where catalysis can turn them, organisms and
   herds carry an outlined **rotation knob** on the rim (organisms ~22 % of their radius, herds ~14 %).
 - Grammar: 4 colours at every level (light blue, purple, red, green). Each colour of organism and herd has 2 recipes (realisations), built from `COMPOSITION` (default `'same'`: own colour only, 5 / 4 cells and 4 / 3 organisms). **Generation always uses recipe 0**; recipe 1 appears only via the debug swap.
-- `herds` herds (default 7; they cycle through the four colours), `lone` lone organisms (default 18; skipped if cells inside organisms would exceed 380), then `free` loose cells (default 140). Defaults live in `DEFAULTS` in `src/config.ts`. Each starting herd has 4 organisms of 5 cells (recipe 0 of `COMPOSITION`). With 7 herds that gives 46 organisms and ~370 cells at the start (seed 42: 370 cells, 46 organisms). Tests check the loose-cell count and the cap over 32 seeds. More loose cells means more crowding: at seed 42 about 5 organisms die in 3 min with 120 loose cells (2 with 50, 9 with 200).
+- `herds` herds (default 8; they cycle through the four colours), `lone` lone organisms (default 22; skipped if cells inside organisms would exceed 380), then `free` loose cells (default 170). Defaults live in `DEFAULTS` in `src/config.ts`. Each starting herd has 4 organisms of 5 cells (recipe 0 of `COMPOSITION`). With 8 herds that gives 54 organisms and ~440 cells at the start (seed 42: 440 cells, 54 organisms). Tests check the loose-cell count and the cap over 32 seeds. More loose cells means more crowding: at seed 42 about 5 organisms die in 3 min with 120 loose cells (2 with 50, 9 with 200).
 - The laws (3×3 cell, 3×3 organism, 2×2 herd matrices, cruise speeds and turn rates) are drawn from the seed, so each seed is a different "physics".
 - **Same-colour attraction (`same`):** the cell law matrix is drawn per seed, so for roughly half the seeds' cell types same-colour cells attract (the values depend on the seed). With `same=0` (default) any positive same-colour entry is set to 0. Similarity (`similar`) is a separate, opt-in attraction and is not affected.
 - Interaction kernel is particle-life style: repulsive core below `rmin`, matrix-weighted triangular kernel up to `rmax`.
@@ -526,7 +562,7 @@ free-standing ancestor's outline. Same-level collision is unchanged.
 
 **Interaction and UI**
 - Selection: the first click selects the deepest hit (lowest tier, nearest centre). Clicking the same spot again climbs to the parent; past the top it wraps back to the deepest. Clicking empty space clears the selection.
-- A click becomes a drag after 4 px of movement. Dragging starts only if the pointer went down on the selection or one of its parts; otherwise the drag pans.
+- A click becomes a drag after 4 px of movement. Dragging starts only if the pointer went down on the selection or one of its parts; otherwise it does nothing (no panning: the arrow keys move the view).
 - Inspect panel (debug only) "size" is the on-screen radius in world units; "speed" is world units per second.
 - Report text edits are logged on `change` (blur / Enter), not per keystroke. The notepad is logged when typing pauses for 2 s, when it is hidden, and at the end.
 - Report is untimed (Next / Finish buttons). Explore uses wall-clock time and keeps counting while paused.

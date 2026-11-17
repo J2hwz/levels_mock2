@@ -117,12 +117,12 @@ export const DYNAMICS = {
   /** after a roll, a line links the pair for this many ticks (0.4 s) before the result takes effect */
   revealTicks: 12,
   /** a bound cell pushes every cell except its partner within this range (centre to centre; scales with P.cellR) ... */
-  lockRepelR: 36,
+  lockRepelR: 42,
   /** ... with this strength at contact, fading to 0 at the range, per level (cells only by default) */
   lockRepel: [100, 0, 0],
   /** before binding: two free, unbound lock-pair things within this range (centre to centre, so it follows the sizes:
-   * cells 6, herds ~91) pull gently toward each other ... */
-  lockAttractR: [48, 90, 200],
+   * cells 7, herds ~93) pull gently toward each other ... */
+  lockAttractR: [56, 90, 200],
   /** ... with this strength at contact, fading to 0 at the range, per level (stops once an encounter has been tried) */
   lockAttract: [50, 20, 8],
   /** catalysed spin, rad/s, per level */
@@ -363,7 +363,7 @@ export const P = {
   worldW: 2400,
   worldH: 1600,
   // TUNE: cell radius (world units). Cell contact (rmin[0]), reach (rmax[0]) and the stress radii below are scaled with it.
-  cellR: 6,
+  cellR: 7,
   damping: 0.9,
   maxSpeed: 400,
   /** four colours at every level: 0 light blue, 1 purple, 2 red, 3 green */
@@ -382,21 +382,21 @@ export const P = {
   // TUNE: same-tier interactions, per level [T0, T1, T2]: core range (rmin), reach (rmax),
   // contact repulsion strength (repel) and overall strength of the laws (gain)
   // (rmin: cells touch at 2 x cellR + 1; herds at about twice a 4-organism herd's radius)
-  rmin: [13, 58, 180],
-  rmax: [54, 220, 800],
+  rmin: [15, 58, 180],
+  rmax: [63, 220, 800],
   repel: [600, 400, 300],
   gain: [150, 60, 70],
   // TUNE: springs member -> parent slot, indexed by parent tier (how tightly parts are held)
   springK: [0, 70, 10],
   springC: [0, 4, 2],
   // TUNE: downward causation (hormone / herd density)
-  stressR: 24,
+  stressR: 28,
   stressRate: 0.15,
   hormoneRate: 0.1,
   hormoneNoise: 0.08,
   hormoneThr: 0.25,
   jitter: 220,
-  stressRepelR: 29,
+  stressRepelR: 34,
   stressRepel: 260,
   densityRate: 0.1,
   densityNoise: 0.08,

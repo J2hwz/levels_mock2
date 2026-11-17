@@ -19,6 +19,11 @@ export interface SessionEnv {
 export class Session {
   readonly state: WorldState;
   readonly logger: Logger;
+  /**
+   * Extra fields merged into each logged sim event (the app adds `inView`: did it happen in the viewing window).
+   * Annotation only: replay reads actions and hashes, never these.
+   */
+  annotate: ((e: SimEvent) => Record<string, unknown>) | null = null;
 
   constructor(
     readonly config: Config,
@@ -73,6 +78,6 @@ export class Session {
   }
 
   private logSimEvents(evs: SimEvent[]): void {
-    for (const e of evs) this.logger.log(e.kind, e);
+    for (const e of evs) this.logger.log(e.kind, this.annotate ? { ...e, ...this.annotate(e) } : e);
   }
 }

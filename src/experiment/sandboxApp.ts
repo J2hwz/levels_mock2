@@ -4,11 +4,13 @@
 //   task:  one generalisation task in an empty world: drop things in from a palette, 1 minute (see generalisation.ts)
 
 import type { Config } from '../config';
-import type { Session } from '../log/session';
+import { HASH_EVERY_TICKS, type Session } from '../log/session';
 import { InputController } from '../render/input';
 import { type Layout, computeLayout } from '../render/layout';
 import { Renderer } from '../render/renderer';
 import { SKINS, hex } from '../render/skins';
+import { VIEW, eventInView, inRect, viewCounts } from '../render/view';
+import { ViewMask } from '../render/viewMask';
 import { hashWorld } from '../sim/hash';
 import { type Action, P, type Tier, chanceOf } from '../sim/world';
 import { ControlsLegend, InspectPanel, type InspectInfo, PhaseBanner } from '../ui/controls';
@@ -22,14 +24,14 @@ import { saveBackup as saveMainBackup } from './storage';
 const TICK_MS = 1000 / P.ticksPerSecond;
 
 const MAX_TICKS_PER_FRAME = 8;
-const CAMERA_SAMPLE_MS = 250;
+const VIEW_SAMPLE_MS = 250;
 const BACKUP_MS = 10_000;
 
 export const PHASES = [
   {
     key: 'explore',
     title: 'Explore',
-    text: 'Look around and try things out. Click, drag, zoom. Find out how this world works.',
+    text: 'Look around and try things out. Click, drag, and use the arrow keys to look around. Find out how this world works.',
   },
   {
     key: 'report',
@@ -72,12 +74,27 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
 
   const renderer = await Renderer.create(stage, skin);
   renderer.canvas.classList.add('world-canvas');
-  if (task) {
-    // the task world starts empty: look closely at its centre, so dropped cells are easy to see
-    renderer.camera.x = P.worldW / 2;
-    renderer.camera.y = P.worldH / 2;
-    renderer.camera.zoom = 2;
-  }
+  // the viewing window (fixed size, starts at the world centre): the surround is blurred and can't be touched
+  const mask = new ViewMask(hex(skin.bg));
+  renderer.canvas.after(mask.el);
+  let stageSize = '';
+  /** the on-screen size of the window, logged at the start and whenever the stage is resized */
+  const logViewSetup = () => {
+    const c = renderer.camera;
+    const key = `${c.viewW}x${c.viewH}`;
+    if (key === stageSize) return;
+    stageSize = key;
+    session.log('view_setup', { w: VIEW.w, h: VIEW.h, zoom: Math.round(c.zoom * 1e4) / 1e4, peek: VIEW.peek, stage_w: c.viewW, stage_h: c.viewH });
+  };
+  // every logged sim event says whether it happened in the window; counted for the per-second view_stats
+  let eventsIn = 0;
+  let eventsOut = 0;
+  session.annotate = (e) => {
+    const inView = eventInView(state, layout, e, renderer.camera.rect());
+    if (inView) eventsIn++;
+    else eventsOut++;
+    return { inView };
+  };
 
   // ---- interaction state
   let selected = -1;
@@ -111,6 +128,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
       hovered = id;
       session.log('hover', { id: id >= 0 ? id : null });
     },
+    viewKey: (key, down) => session.log('view_key', { key, down }),
   });
 
   const colourOf = (id: number): { css: string; name: string } | null => {
@@ -177,6 +195,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     if (task ? spawns >= GEN.maxSpawns : phase !== 0) return; // main mode: Explore only
     const r = renderer.canvas.getBoundingClientRect();
     const [x, y] = renderer.camera.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+    if (!inRect(renderer.camera.rect(), x, y)) return; // only inside the viewing window
     act({ kind: 'spawn', tier: t.tier as Tier, type: t.type, x, y });
     if (!task) return;
     spawns++;
@@ -254,11 +273,17 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     const dt = Math.min(renderer.app.ticker.deltaMS, 100);
     fps = fps * 0.95 + (1000 / Math.max(1, renderer.app.ticker.deltaMS)) * 0.05;
     if (!task && phase === 1) return; // report: the world is hidden and stopped
-    input.flush();
+    input.flush(dt);
     acc += dt;
     let n = 0;
     while (acc >= TICK_MS && n < MAX_TICKS_PER_FRAME) {
       const evs = session.tick();
+      if (state.tick % HASH_EVERY_TICKS === 0) {
+        // once a second (sim time): what is in the window, and how many events happened in it vs elsewhere
+        session.log('view_stats', { ...renderer.camera.state(), counts: viewCounts(state, layout, renderer.camera.rect()), events_in: eventsIn, events_out: eventsOut });
+        eventsIn = 0;
+        eventsOut = 0;
+      }
       const hit = task && !success ? evs.find((e) => isTaskSuccess(task, e)) : undefined;
       if (task && hit && hit.kind === 'encounter') {
         // the target mechanism happened (any sizes): say so, and let them move on
@@ -277,6 +302,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
 
     layout = computeLayout(state);
     renderer.draw(state, layout, { selected, hovered, debug: cfg.debug, contents: !cfg.composition ? 'never' : cfg.reveal ? 'hover' : 'always', skin, time: (performance.now() - t0) / 1000, flash: performance.now() < flash.until ? flash.id : -1 });
+    mask.update(renderer.camera); // after draw: it has re-read the stage size
+    logViewSetup();
     if (cfg.debug) inspect.update(inspectInfo());
 
     if (task) {
@@ -297,7 +324,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
         `hier=${cfg.hier ? 1 : 0} composition=${cfg.composition ? 'yes' : 'no'} movement=${cfg.movement} chance=${cfg.chance} cross=${cfg.cross.toFixed(2)} skin=${cfg.skin} seed=${cfg.seed} eps=${cfg.eps}\n` +
         `alive: ${[0, 1, 2].map((t) => state.entities.filter((e) => e.alive && e.tier === t).length).join('/')} (cells/organisms/herds)` +
         `  events=${session.logger.events.length}\n` +
-        `keys: Esc clear · S swap realisation (debug)`;
+        `view x=${renderer.camera.state().x} y=${renderer.camera.state().y} ${VIEW.w}×${VIEW.h} zoom=${renderer.camera.zoom.toFixed(2)} peek=${VIEW.peek}  events this second in/out ${eventsIn}/${eventsOut}\n` +
+        `keys: arrows move · Esc clear · S swap realisation (debug)`;
     }
   };
 
@@ -334,7 +362,7 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     };
   };
 
-  const camTimer = window.setInterval(() => session.log('camera', renderer.camera.state()), CAMERA_SAMPLE_MS);
+  const camTimer = window.setInterval(() => session.log('view', renderer.camera.state()), VIEW_SAMPLE_MS);
   const backupTimer = window.setInterval(() => saveBackup(session), BACKUP_MS);
   renderer.app.ticker.add(frame);
 
@@ -377,7 +405,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     };
   }
 
-  session.log('camera', renderer.camera.state());
+  logViewSetup();
+  session.log('view', renderer.camera.state());
   if (task) startTask();
   else enterPhase(0);
   return done;

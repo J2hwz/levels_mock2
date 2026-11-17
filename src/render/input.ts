@@ -4,7 +4,9 @@
 //   Shift-drag: detach first (a member leaves its parent with its partner; a free one leaves its partner)
 //   dropping never builds anything: things just meet (so lock & key / catalysis can be seen).
 //   C while dragging: join the compatible parent it touches, else combine it with every loose same-level
-//   thing touching it into a new parent; then keep dragging that whole. drag background: pan; wheel: zoom
+//   thing touching it into a new parent; then keep dragging that whole.
+//   arrow keys: scroll the world under the viewing window. No zoom, no drag-to-pan.
+//   look only outside the window: nothing there can be hovered or picked, and a dragged thing can't leave it
 //   Esc: clear selection; S (debug only): swap realisation; C: see above
 //   composition=no: only whole things can be hovered, selected or dragged, and C does nothing
 
@@ -12,6 +14,7 @@ import type { Action, WorldState } from '../sim/world';
 import { canCombine, findCombineGroup, findJoinTarget } from '../sim/world';
 import type { Camera } from './camera';
 import { type Layout, actionableChain, displayToSim, hitChain } from './layout';
+import { VIEW, clampToView, inRect } from './view';
 
 export interface InputHost {
   readonly state: WorldState;
@@ -24,7 +27,11 @@ export interface InputHost {
   setHover(id: number): void;
   /** C found nothing to join or combine with */
   refused(id: number): void;
+  /** an arrow key went down or up (for the log) */
+  viewKey(key: string, down: boolean): void;
 }
+
+const ARROWS: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
 const CLICK_SLOP_PX = 4;
 const HIT_MIN_PX = 5;
@@ -38,12 +45,15 @@ export class InputController {
     ly: number;
     chain: number[];
     shift: boolean;
-    mode: 'none' | 'drag' | 'pan';
+    /** ignore: moved off the selection, which does nothing (there is no drag-to-pan) */
+    mode: 'none' | 'drag' | 'ignore';
     dragId: number;
     offX: number;
     offY: number;
   } | null = null;
   private pendingMove: Action | null = null;
+  /** arrow keys held down */
+  private readonly held = new Set<string>();
   private readonly off: (() => void)[] = [];
 
   constructor(
@@ -59,18 +69,43 @@ export class InputController {
     on(canvas, 'pointerup', (e) => this.onUp(e));
     on(canvas, 'pointercancel', (e) => this.onUp(e));
     on(canvas, 'pointerleave', () => !this.down && this.host.setHover(-1));
-    on(canvas, 'wheel', (e) => this.onWheel(e), { passive: false });
+    on(canvas, 'wheel', (e) => e.preventDefault(), { passive: false }); // no zoom; don't scroll the page either
     on(canvas, 'contextmenu', (e) => e.preventDefault());
     on(window, 'keydown', (e) => this.onKey(e));
+    on(window, 'keyup', (e) => this.release(e.key));
+    on(window, 'blur', () => [...this.held].forEach((k) => this.release(k)));
   }
 
   /** Remove every listener (safe to call more than once). */
   dispose(): void {
     for (const f of this.off.splice(0)) f();
+    this.held.clear();
   }
 
-  /** Called once per frame before sim ticks: at most one dragMove action per frame. */
-  flush(): void {
+  /**
+   * Called once per frame before sim ticks: scroll for the arrow keys held (dtMs since the last frame), then send
+   * at most one dragMove action. A held drag follows the scroll, so the thing stays under the pointer.
+   */
+  flush(dtMs = 0): void {
+    if (this.held.size && dtMs > 0) {
+      let dx = 0;
+      let dy = 0;
+      for (const k of this.held) {
+        dx += ARROWS[k][0];
+        dy += ARROWS[k][1];
+      }
+      const step = (VIEW.speed * dtMs) / 1000;
+      this.host.camera.moveBy(dx * step, dy * step);
+      const d = this.down;
+      if (d?.mode === 'drag') {
+        const [tx, ty] = this.dragTarget(d.lx, d.ly);
+        this.pendingMove = { kind: 'dragMove', id: d.dragId, x: tx, y: ty };
+      }
+    }
+    this.flushMove();
+  }
+
+  private flushMove(): void {
     if (this.pendingMove) {
       this.host.act(this.pendingMove);
       this.pendingMove = null;
@@ -84,6 +119,7 @@ export class InputController {
 
   private chainAt(sx: number, sy: number): number[] {
     const [wx, wy] = this.host.camera.screenToWorld(sx, sy);
+    if (!inRect(this.host.camera.rect(), wx, wy)) return []; // look only outside the window
     return actionableChain(this.host.state, hitChain(this.host.state, this.host.layout(), wx, wy, HIT_MIN_PX / this.host.camera.zoom));
   }
 
@@ -121,23 +157,21 @@ export class InputController {
         const [tx, ty] = this.dragTarget(sx, sy);
         this.host.act({ kind: 'dragStart', id: sel, x: tx, y: ty });
       } else {
-        d.mode = 'pan';
+        d.mode = 'ignore';
       }
     }
     if (d.mode === 'drag') {
       const [tx, ty] = this.dragTarget(sx, sy);
       this.pendingMove = { kind: 'dragMove', id: d.dragId, x: tx, y: ty };
-    } else if (d.mode === 'pan') {
-      this.host.camera.panByScreen(sx - d.sx, sy - d.sy);
-      d.sx = sx;
-      d.sy = sy;
     }
   }
 
   private dragTarget(sx: number, sy: number): [number, number] {
     const d = this.down!;
     const [wx, wy] = this.host.camera.screenToWorld(sx, sy);
-    return displayToSim(this.host.state, this.host.layout(), d.dragId, wx + d.offX, wy + d.offY);
+    // the dragged thing's centre stays inside the window
+    const [cx, cy] = clampToView(this.host.camera.rect(), wx + d.offX, wy + d.offY);
+    return displayToSim(this.host.state, this.host.layout(), d.dragId, cx, cy);
   }
 
   private onUp(e: PointerEvent): void {
@@ -148,7 +182,7 @@ export class InputController {
     if (d.mode === 'none') {
       this.click(d.chain);
     } else if (d.mode === 'drag') {
-      this.flush();
+      this.flushMove();
       this.host.act({ kind: 'dragEnd', id: d.dragId });
     }
   }
@@ -159,7 +193,7 @@ export class InputController {
     const s = this.host.state;
     const id = d.dragId;
     if (s.config.compose === false) return; // nothing can be combined in composition=no
-    this.flush();
+    this.flushMove();
     const target = findJoinTarget(s, id);
     if (target >= 0) {
       this.host.act({ kind: 'join', id, parent: target });
@@ -195,15 +229,22 @@ export class InputController {
     this.host.select(i >= 0 ? (chain[i + 1] ?? chain[0]) : chain[0]);
   }
 
-  private onWheel(e: WheelEvent): void {
-    e.preventDefault();
-    const [sx, sy] = this.local(e);
-    this.host.camera.zoomAt(sx, sy, Math.exp(-e.deltaY * 0.0015));
+  private release(key: string): void {
+    if (!this.held.delete(key)) return;
+    this.host.viewKey(key, false);
   }
 
   private onKey(e: KeyboardEvent): void {
     const tag = (e.target as HTMLElement | null)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (e.key in ARROWS) {
+      e.preventDefault(); // don't scroll the page
+      if (!this.held.has(e.key)) {
+        this.held.add(e.key);
+        this.host.viewKey(e.key, true);
+      }
+      return;
+    }
     if ((e.key === 'c' || e.key === 'C') && !e.repeat && this.down?.mode === 'drag') {
       this.combineNow();
       return;

@@ -81,8 +81,7 @@ export class ControlsLegend {
         ...(this.compose ? [row(['Drag', 'C'], 'combine it with whatever it is touching')] : []),
         row(['Drag a picture'], 'add it to the world'),
         row(['Delete'], 'remove the selected thing'),
-        row(['Scroll'], 'zoom'),
-        row(['Drag background'], 'move around'),
+        row(['← ↑ → ↓'], 'move around (arrow keys)'),
         ...(this.debug ? [row(['S'], 'swap realisation (debug)')] : []),
       ),
     );

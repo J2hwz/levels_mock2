@@ -94,9 +94,9 @@ export const DEFAULTS = {
   /** optimal sizes [min, unstable): organisms keep their health with 4-5 cells, herds with 3-4 organisms */
   org: [4, 6] as [number, number],
   herd: [3, 5] as [number, number],
-  free: 140,
-  herds: 7,
-  lone: 18,
+  free: 170,
+  herds: 8,
+  lone: 22,
   same: false,
   chance: 'graded' as ChanceMode,
   /**

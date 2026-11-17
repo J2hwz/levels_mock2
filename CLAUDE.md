@@ -59,6 +59,10 @@ Keep conditions comparable: a change meant for one condition must not silently a
 - **Lock & key and catalysis fire by chance, once per encounter.** An encounter starts when two things come within
   `rangeMargin`, and they must move beyond `apartMargin` before they can roll again. A link line shows the roll for
   `revealTicks`, then it stays (bound), fades (spin) or breaks (failed).
+- **Viewing window:** participants see a fixed-size window (`VIEW` in `src/render/view.ts`: 940 × 624 world units at 0.85 px
+  per unit, about 800 × 530 px). The surround is blurred (`VIEW.peek`) and look-only, the arrow keys scroll, and there is no zoom. It is
+  render/UI state, not world state. It is logged as `view`, `view_setup`, `view_key` and `view_stats`, plus `inView` on
+  sim events (`Session.annotate`).
 - **Participants compose by hand:** drop-to-join, drag + C to combine a touching group, Shift-drag to detach.
 
 ## Repository structure
@@ -71,7 +75,7 @@ src/
     rng.ts         mulberry32 + gauss + hash01: the only randomness
     dmath.ts       cross-engine deterministic sin/cos/hypot
     hash.ts        state hash used to verify replays
-  render/          Pixi renderer, skins (colours/shapes), camera, pure layout + hit testing, pointer -> Action
+  render/          Pixi renderer, skins (colours/shapes), camera + viewing window (view.ts), pure layout + hit testing, pointer -> Action
   log/             Logger (event stream) and Session (world + log; used by app and tests)
   ui/              report phase, picture tokens (tokens.ts), notepad, inspect panel, controls legend, phase banner
   experiment/      jsPsych timeline, SandboxPlugin, the app loop (main + task mode), generalisation.ts (GEN), download/backup

@@ -48,7 +48,8 @@ export function run(cfg: Config): JsPsych {
           <li><b>Hover</b> over something to highlight it${cfg.reveal && comp ? ' and see what is inside it' : ''}. <b>Click</b> to select it.</li>
           ${comp ? '<li><b>Click again</b> on the same spot to select something bigger that it is part of.</li>' : ''}
           <li><b>Esc</b> clears the selection.</li>
-          <li><b>Scroll</b> to zoom. <b>Drag the background</b> to move around.</li>
+          <li>You see the world through a <b>window</b> in the middle of the screen; the rest is blurred.
+            Use the <b>arrow keys</b> (← ↑ → ↓) to move around. You can only touch things inside the window.</li>
         </ul></div>`,
       `<div class="prose"><h2>Doing things</h2>
         <ul>

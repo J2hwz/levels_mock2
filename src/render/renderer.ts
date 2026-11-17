@@ -44,8 +44,7 @@ export class Renderer {
     await app.init({ resizeTo: parent, background: skin.bg, antialias: true, autoDensity: true, resolution: window.devicePixelRatio || 1 });
     parent.appendChild(app.canvas);
     const r = new Renderer(app);
-    r.camera.setView(app.screen.width, app.screen.height);
-    r.camera.fit(P.worldW, P.worldH);
+    r.camera.setView(app.screen.width, app.screen.height); // fixed zoom, window at the world centre
     return r;
   }
 
@@ -59,7 +58,7 @@ export class Renderer {
 
   draw(s: WorldState, layout: Layout, v: ViewState): void {
     const cam = this.camera;
-    cam.setView(this.app.screen.width, this.app.screen.height);
+    cam.setView(this.app.screen.width, this.app.screen.height); // re-applies the fixed zoom and the world bounds
     this.world.scale.set(cam.zoom);
     this.world.position.set(cam.viewW / 2 - cam.x * cam.zoom, cam.viewH / 2 - cam.y * cam.zoom);
     const px = 1 / cam.zoom; // one screen pixel in world units
