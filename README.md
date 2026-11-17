@@ -45,8 +45,8 @@ download to the participant's own computer; nothing is sent anywhere.
 | `lock`  | `1` \| `0`                | `1`        | lock & key at every level (purple + green bind; same-size chance per encounter 90 % cells / 50 % organisms / 10 % herds; different sizes: see "Size-pair chances"). Every bond lets go after 12 s (`DYNAMICS.bondTicks`) |
 | `catalysis` | `1` \| `0`            | `1`        | catalysis at every level (light blue makes red spin; same-size chance per encounter 50 % cells / 90 % organisms / 10 % herds; different sizes: see "Size-pair chances") |
 | `similar` | levels                  | none       | similarity ("birds of a feather") at these levels |
-| `org`   | `min-unstable`            | `5-8`      | membrane size band: stable with 5–7 cells, drains below 5 or at 8+ |
-| `herd`  | `min-unstable`            | `3-7`      | haze size band: stable with 3–6 membranes |
+| `org`   | `min-unstable`            | `4-6`      | membrane size band: stable (optimal) with 4–5 cells, drains below 4 or at 6+ |
+| `herd`  | `min-unstable`            | `3-5`      | haze size band: stable (optimal) with 3–4 membranes, drains below 3 or at 5+ |
 | `free`  | 0..600                    | `140`      | number of loose cells floating around at the start |
 | `herds` | 0..12                     | `7`        | number of herds (hazes) at the start |
 | `lone`  | 0..40                     | `18`       | number of lone organisms (membranes) at the start |
@@ -387,7 +387,12 @@ Where the brief left something open, I chose the following.
 
 **World**
 - World is 2400 × 1600 units with soft walls. The camera starts fitted to the whole world.
-- Grammar: 4 colours at every level (light blue, purple, red, green). Each colour of organism and herd has 2 recipes (realisations), built from `COMPOSITION` (default `'same'`: own colour only, 5 / 7 cells and 4 / 6 organisms). **Generation always uses recipe 0**; recipe 1 appears only via the debug swap.
+- **Sizes** (physical: what you see is what collides and what you click). Cells have radius 6 (`P.cellR`; cell contact,
+  reach and stress radii scale with it). Organisms hold their cells on a ring of `6 + 2.4n`. Herds hold their organisms on
+  a ring of `16 + 11n` with a padding of 4, so a 4-organism herd has radius ~92 (it was ~121); herds touch at `P.rmin[2]` = 180.
+  Herds are drawn with a **double border** (outer ring plus a thinner inner ring). Where catalysis can turn them, organisms and
+  herds carry an outlined **rotation knob** on the rim (organisms ~22 % of their radius, herds ~14 %).
+- Grammar: 4 colours at every level (light blue, purple, red, green). Each colour of organism and herd has 2 recipes (realisations), built from `COMPOSITION` (default `'same'`: own colour only, 5 / 4 cells and 4 / 3 organisms). **Generation always uses recipe 0**; recipe 1 appears only via the debug swap.
 - `herds` herds (default 7; they cycle through the four colours), `lone` lone organisms (default 18; skipped if cells inside organisms would exceed 380), then `free` loose cells (default 140). Defaults live in `DEFAULTS` in `src/config.ts`. Each starting herd has 4 organisms of 5 cells (recipe 0 of `COMPOSITION`). With 7 herds that gives 46 organisms and ~370 cells at the start (seed 42: 370 cells, 46 organisms). Tests check the loose-cell count and the cap over 32 seeds. More loose cells means more crowding: at seed 42 about 5 organisms die in 3 min with 120 loose cells (2 with 50, 9 with 200).
 - The laws (3×3 cell, 3×3 organism, 2×2 herd matrices, cruise speeds and turn rates) are drawn from the seed, so each seed is a different "physics".
 - **Same-colour attraction (`same`):** the cell law matrix is drawn per seed, so for roughly half the seeds' cell types same-colour cells attract (the values depend on the seed). With `same=0` (default) any positive same-colour entry is set to 0. Similarity (`similar`) is a separate, opt-in attraction and is not affected.
@@ -398,8 +403,8 @@ Where the brief left something open, I chose the following.
 - Only free (top-level) organisms and herds self-propel (cruise along their heading, which turns at a per-kind rate). Members are carried by springs.
 - The hormone threshold is 0.25. Health decays at 0.15 × excess per s and recovers at 0.03 per s. In a 3-min probe (seed 42, no interaction) about 3 organisms died.
 - A herd dissolves when it has no organisms left. An organism emptied by detaching dies with `cause: "empty"`.
-- **Size bands** (`org`, `herd`): a membrane is stable with `[min, unstable)` cells (default 5–7), a haze with `[min, unstable)`
-  membranes (default 3–6). Outside its band a composite loses 0.05 health/s (~20 s to fall apart), on top of the hormone decay;
+- **Size bands** (`org`, `herd`): a membrane is stable with `[min, unstable)` cells (default 4–5), a haze with `[min, unstable)`
+  membranes (default 3–4). Outside its band a composite loses 0.05 health/s (~20 s to fall apart), on top of the hormone decay;
   it recovers only inside its band. At 0 it falls apart into free parts (`cause: "size"`). Herds now carry health too; their bar
   shows only when below full. Generated recipes use only stable sizes (organisms `[min, unstable-1]`, herds `[min, unstable-2]`
   for recipe 0 to stay within the cell budget).

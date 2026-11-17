@@ -5,7 +5,7 @@ import { crossFromSeed, simConfigOf } from '../src/config';
 import { isTaskSuccess } from '../src/experiment/generalisation';
 import { replay } from '../src/replay';
 import { hashWorld } from '../src/sim/hash';
-import { COMPOSITION, DYNAMICS, type Dynamics, type Entity, P, PAIR_RULES, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, lockOn, memberTargets, pairKey, chanceOf, RULE_CAT, RULE_LOCK, type ChanceMode, naturalRadius, ringUnits, step } from '../src/sim/world';
+import { COMPOSITION, DYNAMICS, type Dynamics, type Entity, P, PAIR_RULES, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, lockOn, memberTargets, pairKey, chanceOf, RULE_CAT, RULE_LOCK, type ChanceMode, naturalRadius, ringRadius, ringUnits, step } from '../src/sim/world';
 import { scriptedActions, testConfig, testSession } from './helpers';
 
 function runScripted(query: string, ticks: number): string {
@@ -912,10 +912,12 @@ describe('chance conditions (chance=graded|uniform|none)', () => {
 });
 
 describe('composition (COMPOSITION)', () => {
-  it("'same' (default): every organism is made of its own colour, every herd of its own colour, recipes 5/7 and 4/6", () => {
+  it("'same' (default): every organism is made of its own colour, every herd of its own colour, recipe sizes from COMPOSITION.sizes", () => {
     const s = createWorld({ hier: true, eps: 0.05, seed: 42 });
-    s.grammar.species.forEach((rs, k) => expect(rs).toEqual([Array(5).fill(k), Array(7).fill(k)]));
-    s.grammar.herds.forEach((rs, k) => expect(rs).toEqual([Array(4).fill(k), Array(6).fill(k)]));
+    const [o0, o1] = COMPOSITION.sizes.organism;
+    const [h0, h1] = COMPOSITION.sizes.herd;
+    s.grammar.species.forEach((rs, k) => expect(rs).toEqual([Array(o0).fill(k), Array(o1).fill(k)]));
+    s.grammar.herds.forEach((rs, k) => expect(rs).toEqual([Array(h0).fill(k), Array(h1).fill(k)]));
     for (const e of s.entities) if (e.tier > 0) for (const c of e.children) expect(s.entities[c].type).toBe(e.type);
     expect(new Set(s.entities.filter((e) => e.tier === 2).map((e) => e.type)).size).toBe(4); // all four colours appear
   });
@@ -960,9 +962,9 @@ describe('composition (COMPOSITION)', () => {
   it('swap toggles a same-colour organism between its two sizes', () => {
     const s = dynWorld({}, { move: false });
     const o = s.entities.find((e) => e.alive && e.tier === 1 && e.parent < 0)!;
-    expect(o.children.length).toBe(5);
+    expect(o.children.length).toBe(COMPOSITION.sizes.organism[0]);
     applyAction(s, { kind: 'swap', id: o.id });
-    expect(o.children.length).toBe(7);
+    expect(o.children.length).toBe(COMPOSITION.sizes.organism[1]);
     expect(o.children.every((c) => s.entities[c].type === o.type)).toBe(true);
   });
 });
@@ -1070,11 +1072,12 @@ describe('size band', () => {
 
     const t = dynWorld({}, { move: false });
     const g = founded(t, 0);
+    const [min] = band(t.config, 1);
     for (const c of t.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0)) {
-      if (g.children.length >= 5) break;
+      if (g.children.length >= min) break;
       if (canJoin(t, c.id, g.id)) applyAction(t, { kind: 'join', id: c.id, parent: g.id });
     }
-    expect(g.children.length).toBe(5);
+    expect(g.children.length).toBe(min);
     ticks(t, 30 * 30);
     expect(g.alive).toBe(true);
   });
@@ -1082,11 +1085,12 @@ describe('size band', () => {
   it('over-filling to the unstable size makes it drain', () => {
     const s = dynWorld({}, { move: false });
     const o = s.entities.find((e) => e.tier === 1 && e.parent < 0)!;
+    const [, unstable] = band(s.config, 1);
     for (const c of s.entities.filter((e) => e.alive && e.tier === 0 && e.parent < 0)) {
-      if (o.children.length >= 8) break;
+      if (o.children.length >= unstable) break;
       if (canJoin(s, c.id, o.id)) applyAction(s, { kind: 'join', id: c.id, parent: o.id });
     }
-    expect(o.children.length).toBe(8);
+    expect(o.children.length).toBe(unstable);
     const free = s.entities.find((e) => e.alive && e.tier === 0 && e.parent < 0 && canJoin(s, e.id, o.id));
     expect(free).toBeUndefined(); // no joins past the unstable size
     ticks(s, 60);
@@ -1101,6 +1105,58 @@ describe('size band', () => {
     expect(h.alive).toBe(false);
     expect(evs).toContainEqual(expect.objectContaining({ kind: 'herd_dissolved', id: h.id, cause: 'size', organisms: members }));
     for (const m of members) expect(s.entities[m].parent).toBe(-1);
+  });
+
+  /** health after 30 s of a whole resized to n members (removed members are moved far away, so nothing crowds it) */
+  const healthAt = (tier: 1 | 2, n: number) => {
+    const s = dynWorld({}, { move: false });
+    const p = s.entities.find((e) => e.alive && e.tier === tier && e.parent < 0)!;
+    let far = 200;
+    while (p.children.length > n) {
+      const m = p.children[p.children.length - 1];
+      applyAction(s, { kind: 'detach', id: m });
+      place(s, m, 2300, (far += 60));
+    }
+    for (const e of s.entities) {
+      if (p.children.length >= n) break;
+      if (!e.alive || e.tier !== tier - 1 || e.parent >= 0 || e === p) continue;
+      e.type = p.type; // 'same' composition: only its own colour may join
+      if (canJoin(s, e.id, p.id)) applyAction(s, { kind: 'join', id: e.id, parent: p.id });
+    }
+    expect(p.children.length).toBe(n);
+    ticks(s, 30 * 30);
+    return p.alive ? p.health : 0;
+  };
+
+  it('organisms keep their health with 4-5 cells; fewer or more drain', () => {
+    const [min, unstable] = band(dynWorld({}).config, 1);
+    expect([min, unstable]).toEqual([4, 6]);
+    for (let n = min; n < unstable; n++) expect(healthAt(1, n)).toBe(1);
+    expect(healthAt(1, min - 1)).toBeLessThan(0.9);
+    expect(healthAt(1, unstable)).toBeLessThan(0.9);
+  });
+
+  it('herds keep their health with 3-4 organisms; fewer or more drain', () => {
+    const [min, unstable] = band(dynWorld({}).config, 2);
+    expect([min, unstable]).toEqual([3, 5]);
+    for (let n = min; n < unstable; n++) expect(healthAt(2, n)).toBe(1);
+    expect(healthAt(2, min - 1)).toBeLessThan(0.9);
+    expect(healthAt(2, unstable)).toBeLessThan(0.9);
+  });
+});
+
+describe('sizes and spacing', () => {
+  it('cells on an organism ring and organisms on a herd ring never overlap, for every reachable size', () => {
+    const s = createWorld({ hier: true, eps: 0.05, seed: 42 });
+    const orgR = Math.max(...s.entities.filter((e) => e.tier === 1).map((o) => naturalRadius(s, o)));
+    for (let n = 3; n <= band(s.config, 1)[1]; n++) expect(2 * ringRadius(1, n) * Math.sin(Math.PI / n)).toBeGreaterThan(2 * P.cellR);
+    for (let n = 3; n <= band(s.config, 2)[1]; n++) expect(2 * ringRadius(2, n) * Math.sin(Math.PI / n)).toBeGreaterThan(2 * orgR);
+  });
+
+  it('herds are drawn ~25% smaller than before (a 4-organism herd: radius ~91, was ~121)', () => {
+    const s = createWorld({ hier: true, eps: 0.05, seed: 42 });
+    const herd = s.entities.find((e) => e.tier === 2 && e.children.length === 4)!;
+    expect(naturalRadius(s, herd)).toBeLessThan(0.8 * 121);
   });
 });
 

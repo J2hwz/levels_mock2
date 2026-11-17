@@ -80,8 +80,9 @@ export const DEFAULTS = {
   reveal: true,
   lock: true,
   catalysis: true,
-  org: [5, 8] as [number, number],
-  herd: [3, 7] as [number, number],
+  /** optimal sizes [min, unstable): organisms keep their health with 4-5 cells, herds with 3-4 organisms */
+  org: [4, 6] as [number, number],
+  herd: [3, 5] as [number, number],
   free: 140,
   herds: 7,
   lone: 18,

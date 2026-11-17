@@ -109,8 +109,10 @@ export class Renderer {
       if (e.tier === 2) {
         const col = sk.herd[e.type];
         this.gHerd.circle(n.x, n.y, n.r).fill({ color: col, alpha: (shut ? CLOSED_ALPHA : sk.herdFill) });
-        this.gHerd.circle(n.x, n.y, n.r).stroke({ width: 1.5 * px, color: col, alpha: sk.herdStroke });
-        if (spinMark(2)) rimMark(this.gHerd, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.06, 3 * px), col);
+        // a double border (outer ring + thinner inner ring) so a herd reads as a distinct whole
+        this.gHerd.circle(n.x, n.y, n.r).stroke({ width: 2.5 * px, color: col, alpha: Math.min(1, sk.herdStroke * 1.6) });
+        this.gHerd.circle(n.x, n.y, Math.max(n.r - 5 * px, n.r * 0.9)).stroke({ width: 1.2 * px, color: col, alpha: sk.herdStroke });
+        if (spinMark(2)) rimMark(this.gHerd, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.14, 5 * px), col, sk.ui, px);
         if (bars && e.health < 1) this.healthBar(this.gHerd, n.x, n.y - n.r - 6 * px, Math.max(n.r * 0.6, 20 * px), e.health, sk);
       } else if (e.tier === 1) {
         const col = sk.species[e.type];
@@ -118,7 +120,7 @@ export class Renderer {
         this.gOrg.fill({ color: col, alpha: (shut ? CLOSED_ALPHA : sk.membraneFill) });
         blob(this.gOrg, n.x, n.y, n.r, sk.wobble, v.time * 1.3 + e.id, e.angle);
         this.gOrg.stroke({ width: Math.max(1.5 * px, n.r * 0.08), color: col, alpha: sk.membraneStroke });
-        if (spinMark(1)) rimMark(this.gOrg, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.12, 1.5 * px), col);
+        if (spinMark(1)) rimMark(this.gOrg, n.x, n.y, n.r, e.angle, Math.max(n.r * 0.22, 3 * px), col, sk.ui, px);
         const w = Math.max(n.r * 1.3, 14 * px);
         if (bars) this.healthBar(this.gOrg, n.x, n.y - n.r - w * 0.15 - 2 * px, w, e.health, sk);
       } else {
@@ -259,9 +261,9 @@ export class Renderer {
 /** fill alpha of a closed composite: it shows as its colour, hiding its parts */
 const CLOSED_ALPHA = 0.85;
 
-/** small dot on the rim at the entity's orientation */
-function rimMark(g: Graphics, x: number, y: number, r: number, angle: number, size: number, color: number): void {
-  g.circle(x + r * Math.cos(angle), y + r * Math.sin(angle), size).fill({ color });
+/** knob on the rim at the entity's orientation (so turning is visible), outlined to stand out against the membrane */
+function rimMark(g: Graphics, x: number, y: number, r: number, angle: number, size: number, color: number, outline: number, px: number): void {
+  g.circle(x + r * Math.cos(angle), y + r * Math.sin(angle), size).fill({ color }).stroke({ width: 1.2 * px, color: outline, alpha: 0.8 });
 }
 
 function blob(g: Graphics, x: number, y: number, r: number, wob: number, phase: number, angle = 0): void {

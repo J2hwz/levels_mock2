@@ -64,8 +64,11 @@ export interface Dynamics {
   similar: readonly boolean[];
 }
 
-export const DEFAULT_ORG: readonly [number, number] = [5, 8];
-export const DEFAULT_HERD: readonly [number, number] = [3, 7];
+// TUNE: optimal sizes (size bands [min, unstable)): a composite keeps its health only with min..unstable-1 members;
+// fewer or more and it drains (DYNAMICS.sizeDecay) and falls apart. The app's defaults are DEFAULTS.org / herd in
+// src/config.ts (these are the fallbacks). Organisms: 4-5 cells. Herds: 3-4 organisms.
+export const DEFAULT_ORG: readonly [number, number] = [4, 6];
+export const DEFAULT_HERD: readonly [number, number] = [3, 5];
 
 // =====================================================================================================
 // TUNE: interaction mechanisms. Which pairs bind / catalyse, how likely, and how strong every mechanism is.
@@ -106,12 +109,13 @@ export const DYNAMICS = {
   apartMargin: [20, 40, 120],
   /** after a roll, a line links the pair for this many ticks (0.4 s) before the result takes effect */
   revealTicks: 12,
-  /** a bound cell pushes every cell except its partner within this range ... */
-  lockRepelR: 30,
+  /** a bound cell pushes every cell except its partner within this range (centre to centre; scales with P.cellR) ... */
+  lockRepelR: 36,
   /** ... with this strength at contact, fading to 0 at the range, per level (cells only by default) */
   lockRepel: [100, 0, 0],
-  /** before binding: two free, unbound lock-pair things within this range pull gently toward each other ... */
-  lockAttractR: [40, 90, 260],
+  /** before binding: two free, unbound lock-pair things within this range (centre to centre, so it follows the sizes:
+   * cells 6, herds ~91) pull gently toward each other ... */
+  lockAttractR: [48, 90, 200],
   /** ... with this strength at contact, fading to 0 at the range, per level (stops once an encounter has been tried) */
   lockAttract: [50, 20, 8],
   /** catalysed spin, rad/s, per level */
@@ -150,7 +154,7 @@ export type CompositionMode = 'same' | 'pairs' | 'mostly' | 'custom';
 export const COMPOSITION = {
   mode: 'same' as CompositionMode,
   /** members per recipe [recipe 0, recipe 1], for 'same' / 'pairs' / 'mostly' */
-  sizes: { organism: [5, 7], herd: [4, 6] },
+  sizes: { organism: [5, 4], herd: [4, 3] },
   /** 'pairs': partner colour of each colour (light blue+green, purple+red) */
   pairs: [3, 2, 1, 0],
   pairShare: 0.6,
@@ -159,16 +163,16 @@ export const COMPOSITION = {
   /** 'custom': [colour][recipe] = counts of member colours [light blue, purple, red, green] */
   custom: {
     organism: [
-      [[5, 0, 0, 0], [7, 0, 0, 0]],
-      [[0, 5, 0, 0], [0, 7, 0, 0]],
-      [[0, 0, 5, 0], [0, 0, 7, 0]],
-      [[0, 0, 0, 5], [0, 0, 0, 7]],
+      [[5, 0, 0, 0], [4, 0, 0, 0]],
+      [[0, 5, 0, 0], [0, 4, 0, 0]],
+      [[0, 0, 5, 0], [0, 0, 4, 0]],
+      [[0, 0, 0, 5], [0, 0, 0, 4]],
     ],
     herd: [
-      [[4, 0, 0, 0], [6, 0, 0, 0]],
-      [[0, 4, 0, 0], [0, 6, 0, 0]],
-      [[0, 0, 4, 0], [0, 0, 6, 0]],
-      [[0, 0, 0, 4], [0, 0, 0, 6]],
+      [[4, 0, 0, 0], [3, 0, 0, 0]],
+      [[0, 4, 0, 0], [0, 3, 0, 0]],
+      [[0, 0, 4, 0], [0, 0, 3, 0]],
+      [[0, 0, 0, 4], [0, 0, 0, 3]],
     ],
   },
 };
@@ -347,7 +351,8 @@ export const P = {
   ticksPerSecond: 30,
   worldW: 2400,
   worldH: 1600,
-  cellR: 5,
+  // TUNE: cell radius (world units). Cell contact (rmin[0]), reach (rmax[0]) and the stress radii below are scaled with it.
+  cellR: 6,
   damping: 0.9,
   maxSpeed: 400,
   /** four colours at every level: 0 light blue, 1 purple, 2 red, 3 green */
@@ -365,21 +370,22 @@ export const P = {
   freeCells: 140,
   // TUNE: same-tier interactions, per level [T0, T1, T2]: core range (rmin), reach (rmax),
   // contact repulsion strength (repel) and overall strength of the laws (gain)
-  rmin: [11, 58, 220],
-  rmax: [45, 220, 800],
+  // (rmin: cells touch at 2 x cellR + 1; herds at about twice a 4-organism herd's radius)
+  rmin: [13, 58, 180],
+  rmax: [54, 220, 800],
   repel: [600, 400, 300],
   gain: [150, 60, 70],
   // TUNE: springs member -> parent slot, indexed by parent tier (how tightly parts are held)
   springK: [0, 70, 10],
   springC: [0, 4, 2],
   // TUNE: downward causation (hormone / herd density)
-  stressR: 20,
+  stressR: 24,
   stressRate: 0.15,
   hormoneRate: 0.1,
   hormoneNoise: 0.08,
   hormoneThr: 0.25,
   jitter: 220,
-  stressRepelR: 24,
+  stressRepelR: 29,
   stressRepel: 260,
   densityRate: 0.1,
   densityNoise: 0.08,
@@ -411,7 +417,8 @@ export const P = {
 
 export function ringRadius(tier: Tier, n: number): number {
   if (tier === 1) return 6 + 2.4 * n;
-  if (tier === 2) return 34 + 13 * n;
+  // TUNE: herd ring radius for n organisms (smaller = tighter, smaller herds; organisms stay clear of each other for 3-5)
+  if (tier === 2) return 16 + 11 * n;
   return 0;
 }
 
@@ -421,7 +428,7 @@ export function naturalRadius(s: WorldState, e: Entity): number {
   if (e.tier === 1) return ringRadius(1, e.children.length) + P.cellR + 4;
   let maxChild = 0;
   for (const c of e.children) maxChild = Math.max(maxChild, naturalRadius(s, s.entities[c]));
-  return ringRadius(2, e.children.length) + maxChild + 8;
+  return ringRadius(2, e.children.length) + maxChild + 4;
 }
 
 export function slotPos(parent: Entity, k: number, n: number): [number, number] {

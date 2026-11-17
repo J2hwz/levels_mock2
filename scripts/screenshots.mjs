@@ -375,6 +375,9 @@ for (const hier of [1, 0]) {
   await page.waitForTimeout(150);
   await dragOnto(ids.cell2, ids.org, false);
   const droppedOnly = await parentOf(ids.cell2);
+  // the world keeps running: a cell dropped inside the organism is pushed back out (collision between levels), so let it
+  // settle before picking it up again
+  await page.waitForTimeout(1000);
   await dragOnto(ids.cell2, ids.org, true);
   const rejoined = await parentOf(ids.cell2);
   console.log(`re-join: drop alone -> parent ${droppedOnly}; with C -> parent ${rejoined} (organism ${ids.org})`);
