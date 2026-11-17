@@ -1,12 +1,14 @@
 // All experiment dials + URL-param parsing.
 // ?hier=1|0&composition=yes|no&movement=random|laws&cross=0..1&skin=biology|abstract&seed=42&eps=0.05&move=1|0&wander=1&reveal=1|0
-//  &lock=1|0&catalysis=1|0&similar=0,1,2|all&org=5-8&herd=3-7&free=140&herds=7&lone=18&same=0|1&chance=graded|uniform|none&short=1&debug=1
+//  &lock=1|0&catalysis=1|0&similar=0,1,2|all&org=4-6&herd=3-5&free=140&herds=7&lone=18&same=0|1&chance=graded|uniform|none&pairs=draw|rule&total=300&cap=100&short=1&debug=1
 
+import { type PairChances, drawPairChances } from './sim/pairs';
 import { hash01 } from './sim/rng';
 import type { ChanceMode, Dynamics, SimConfig } from './sim/world';
 
 export type Movement = 'random' | 'laws';
 export type Skin = 'biology' | 'abstract';
+export type PairsMode = 'draw' | 'rule';
 
 export interface Config {
   hier: boolean;
@@ -47,6 +49,14 @@ export interface Config {
    * From the link (`cross=`), else DEFAULTS.cross, else drawn uniformly from the seed.
    */
   cross: number;
+  /** size-pair chances: 'draw' = six numbers per mechanism drawn from the seed (replace chance / cross); 'rule' = chance / cross */
+  pairs: PairsMode;
+  /** pairs=draw: what the six drawn numbers (percent) add up to */
+  total: number;
+  /** pairs=draw: largest allowed number L (percent) */
+  cap: number;
+  /** pairs=draw: the drawn whole percentages per size pair (src/sim/pairs.ts PAIR_ORDER), recorded in the header */
+  pairChance?: PairChances;
   short: boolean;
   debug: boolean;
   /** duration of the Explore phase */
@@ -62,6 +72,7 @@ export interface Config {
 //   conditions .......... hier, composition, movement, chance, cross
 //   mechanisms on/off ... same, lock, catalysis (similar: see parseConfig, `levels(q.get('similar'))`)
 //   chance condition ... chance: 'graded' (DYNAMICS tables) | 'uniform' (mean of each table) | 'none' (no interactions)
+//   drawn chances ...... pairs: 'draw' (six seed-drawn numbers per mechanism, replace chance and cross) | 'rule'; total, cap
 //   motion details ..... move (still world), wander (strength of movement=random)
 //   size bands ......... org, herd
 //   starting world ..... free, herds, lone
@@ -93,6 +104,12 @@ export const DEFAULTS = {
    * null = each participant gets w drawn uniformly from their seed (recorded in the header as `cross`).
    */
   cross: null as number | null,
+  /** size-pair chances: 'draw' = drawn from the seed per participant (overrides chance and cross) | 'rule' = chance / cross */
+  pairs: 'draw' as PairsMode,
+  /** pairs=draw: the six numbers (chances per encounter, %) add up to this; mean chance = total / 6 */
+  total: 300,
+  /** pairs=draw: largest allowed number L, % (1..100); total is lowered to at most 6 x cap */
+  cap: 100,
   exploreMs: 6 * 60 * 1000,
   shortExploreMs: 60 * 1000,
 };
@@ -157,6 +174,10 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
   const seed = seedFromUrl ? Math.floor(seedNum) >>> 0 : randomSeed();
   const crossNum = q.get('cross') === null ? NaN : Number(q.get('cross'));
   const cross = Number.isFinite(crossNum) ? Math.min(1, Math.max(0, crossNum)) : DEFAULTS.cross ?? crossFromSeed(seed);
+  const pm = q.get('pairs')?.trim().toLowerCase();
+  const pairs: PairsMode = pm === 'draw' || pm === 'rule' ? pm : DEFAULTS.pairs;
+  const cap = count(q.get('cap'), DEFAULTS.cap, 1, 100);
+  const total = count(q.get('total'), Math.min(DEFAULTS.total, 6 * cap), 0, 6 * cap);
   return {
     hier: bool(q.get('hier'), DEFAULTS.hier),
     composition: comp === 'no' || comp === '0' || comp === 'false' ? false : comp === 'yes' || comp === '1' || comp === 'true' ? true : DEFAULTS.composition,
@@ -178,6 +199,10 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
     same: bool(q.get('same'), DEFAULTS.same),
     chance: (['graded', 'uniform', 'none'] as const).find((m) => m === q.get('chance')) ?? DEFAULTS.chance,
     cross,
+    pairs,
+    total,
+    cap,
+    ...(pairs === 'draw' ? { pairChance: drawPairChances(seed, total, cap) } : {}),
     short,
     debug: bool(q.get('debug'), false),
     exploreMs: short ? DEFAULTS.shortExploreMs : DEFAULTS.exploreMs,
@@ -192,5 +217,5 @@ export function parseConfig(search: string, randomSeed: () => number = () => Mat
 export function simConfigOf(c: Pick<Config, 'hier' | 'eps' | 'seed'> & Partial<Config> & { laws?: boolean }): SimConfig {
   const laws = c.movement !== undefined ? c.movement === 'laws' : (c.laws ?? true);
   const dyn: Dynamics = { lock: c.lock ?? DEFAULTS.lock, catalysis: c.catalysis ?? DEFAULTS.catalysis, similar: c.similar ?? [false, false, false] };
-  return { hier: c.hier, eps: c.eps, seed: c.seed, move: c.move ?? true, laws, compose: c.composition ?? true, wander: c.wander ?? DEFAULTS.wander, dyn, org: c.org ?? DEFAULTS.org, herd: c.herd ?? DEFAULTS.herd, free: c.free ?? DEFAULTS.free, herds: c.herds ?? DEFAULTS.herds, lone: c.lone ?? DEFAULTS.lone, sameAttract: c.same ?? true, chance: c.chance ?? DEFAULTS.chance, cross: c.cross };
+  return { hier: c.hier, eps: c.eps, seed: c.seed, move: c.move ?? true, laws, compose: c.composition ?? true, wander: c.wander ?? DEFAULTS.wander, dyn, org: c.org ?? DEFAULTS.org, herd: c.herd ?? DEFAULTS.herd, free: c.free ?? DEFAULTS.free, herds: c.herds ?? DEFAULTS.herds, lone: c.lone ?? DEFAULTS.lone, sameAttract: c.same ?? true, chance: c.chance ?? DEFAULTS.chance, cross: c.cross, pairChance: c.pairChance };
 }

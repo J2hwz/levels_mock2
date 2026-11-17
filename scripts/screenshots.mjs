@@ -489,7 +489,8 @@ for (const hier of [1, 0]) {
   await page.locator('#phase-continue').click(); // Finish
 
   // generalisation: intro page, then two 1-minute tasks in an empty world. Drop the target pair from the palette
-  // next to each other; a roll can fail (10%), so drop a fresh pair elsewhere and try again (up to 4 pairs).
+  // next to each other; a roll can fail (the drawn chance can be low), so drop a fresh pair elsewhere and try again
+  // (up to 12 pairs, on a 4 x 3 grid).
   await page.getByRole('button', { name: 'Start' }).click();
   const canvas = page.locator('canvas.world-canvas');
   const doTask = async (name, a, b, gapPx, shot) => {
@@ -497,10 +498,10 @@ for (const hier of [1, 0]) {
     await page.waitForTimeout(300);
     const box = await canvas.boundingBox();
     let ok = false;
-    for (let i = 0; i < 4 && !ok; i++) {
+    for (let i = 0; i < 12 && !ok; i++) {
       // clear of the controls legend (top right) and the inspect panel (bottom left)
-      const cx = 340 + i * 90;
-      const cy = box.height * 0.55 - i * 40;
+      const cx = 340 + (i % 4) * 110;
+      const cy = box.height * 0.6 - Math.floor(i / 4) * 90;
       await page.locator(`.palette .pick[data-token="${a}"]`).dragTo(canvas, { targetPosition: { x: cx, y: cy } });
       await page.locator(`.palette .pick[data-token="${b}"]`).dragTo(canvas, { targetPosition: { x: cx + gapPx, y: cy } });
       await page.waitForTimeout(1200);

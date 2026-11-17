@@ -1,4 +1,4 @@
-import type { WorldState } from './world';
+import { type WorldState, timedBonds } from './world';
 
 // Stable hash of the world state: two independent FNV-1a 32-bit lanes over the
 // exact float64 bytes of every field, in a fixed order. Returns 16 hex chars.
@@ -50,8 +50,8 @@ export function hashWorld(s: WorldState): string {
     h.num(e.density);
     h.num(e.realisation);
     h.num(e.bond);
-    // timed bonds exist only with `cross` set, so logs recorded before them still replay
-    if (s.config.cross !== undefined) h.num(e.bondUntil);
+    // timed bonds exist only with `cross` or drawn pair chances, so logs recorded before them still replay
+    if (timedBonds(s.config)) h.num(e.bondUntil);
     h.num(e.spin);
     // only hashed where it is used, so logs recorded before it existed (laws=1) still replay
     if (s.config.laws === false) h.num(e.heading);

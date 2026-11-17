@@ -2,6 +2,7 @@
 // MUST NOT import Pixi, jsPsych, or touch the DOM. All randomness via ./rng.
 
 import { dcos, dhypot, dsin } from './dmath';
+import { type PairChances, pairIndex } from './pairs';
 import { type RngState, gauss, hash01, makeRng, rand, randInt, randRange } from './rng';
 
 // ---------------------------------------------------------------- types
@@ -50,6 +51,12 @@ export interface SimConfig {
    * pairs only, permanent bonds.
    */
   cross?: number;
+  /**
+   * Drawn size-pair chances (src/sim/pairs.ts, README "Drawn size-pair chances"): whole percentages per size pair for
+   * lock & key and catalysis. Set: they replace the `chance` / `cross` rule in chanceOf, and bonds are timed.
+   * Missing = the chance / cross rule.
+   */
+  pairChance?: PairChances;
 }
 
 export type ChanceMode = 'graded' | 'uniform' | 'none';
@@ -598,8 +605,10 @@ export function band(c: SimConfig, tier: Tier): readonly [number, number] {
  *   b_ii = d_i,  b_ij = m(d_i, d_j)                  starting chance of a pair (m = DYNAMICS.crossMix)
  *   P_ii = min(1, 2(1 - w)) b_ii,  P_ij = min(1, 2w) b_ij     w = config.cross
  * 'none' = 0. Without `cross` (legacy): P_ii = d_i and P_ij = 0.
+ * With drawn pair chances (`pairChance`) the pair's drawn percentage is used instead, ignoring `chance` and `cross`.
  */
 export function chanceOf(c: SimConfig, rule: 'lock' | 'catalysis', ta: number, tb: number = ta): number {
+  if (c.pairChance) return (c.pairChance[rule][pairIndex(ta, tb)] ?? 0) / 100;
   const table = rule === 'lock' ? DYNAMICS.lockChance : DYNAMICS.catChance;
   const mode = c.chance ?? 'graded';
   if (mode === 'none') return 0;
@@ -883,11 +892,19 @@ function removeChild(parent: Entity, childId: number): void {
   if (i >= 0) parent.children.splice(i, 1);
 }
 
-/** Lock & key: bind two things. With `cross` set the bond lasts DYNAMICS.bondTicks; without it, for good. */
+/**
+ * Lock & key bonds let go after DYNAMICS.bondTicks. Every app session has `cross` or drawn pair chances; only logs
+ * recorded before timed bonds existed have neither, and they keep permanent bonds so they still replay.
+ */
+export function timedBonds(c: SimConfig): boolean {
+  return c.cross !== undefined || c.pairChance !== undefined;
+}
+
+/** Lock & key: bind two things, for DYNAMICS.bondTicks (timedBonds) or, in legacy worlds, for good. */
 function bind(s: WorldState, a: Entity, b: Entity): void {
   a.bond = b.id;
   b.bond = a.id;
-  const until = s.config.cross === undefined ? -1 : s.tick + DYNAMICS.bondTicks;
+  const until = timedBonds(s.config) ? s.tick + DYNAMICS.bondTicks : -1;
   a.bondUntil = until;
   b.bondUntil = until;
 }

@@ -5,7 +5,9 @@ import { crossFromSeed, simConfigOf } from '../src/config';
 import { isTaskSuccess } from '../src/experiment/generalisation';
 import { replay } from '../src/replay';
 import { hashWorld } from '../src/sim/hash';
-import { COMPOSITION, DYNAMICS, type Dynamics, type Entity, P, PAIR_RULES, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, lockOn, memberTargets, pairKey, chanceOf, RULE_CAT, RULE_LOCK, type ChanceMode, naturalRadius, ringRadius, ringUnits, step } from '../src/sim/world';
+import { PAIR_ORDER, countSplits, deal, drawPairChances, drawSix, pairIndex } from '../src/sim/pairs';
+import { makeRng } from '../src/sim/rng';
+import { COMPOSITION, DYNAMICS, type Dynamics, type Entity, P, PAIR_RULES, type SimEvent, type WorldState, applyAction, band, canCombine, canJoin, combineKind, createWorld, findCombineGroup, findJoinTarget, lockOn, memberTargets, pairKey, chanceOf, RULE_CAT, RULE_LOCK, type ChanceMode, naturalRadius, ringRadius, ringUnits, step, timedBonds } from '../src/sim/world';
 import { scriptedActions, testConfig, testSession } from './helpers';
 
 function runScripted(query: string, ticks: number): string {
@@ -1549,4 +1551,126 @@ describe('timed lock & key bonds (DYNAMICS.bondTicks, with cross set)', () => {
         expect(m0.parent).toBe(org.id);
       },
     ));
+});
+
+// ---------------------------------------------------------------- drawn size-pair chances (pairs=draw)
+
+describe('drawn size-pair chances (pairs=draw, total, cap)', () => {
+  const sum = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0);
+  const pc = (lock: number[], catalysis: number[] = lock) => ({ lock, catalysis });
+  const draws = (n: number, total = 300, L = 100) => Array.from({ length: n }, (_, i) => drawSix(makeRng(1000 + i), total, L));
+
+  it('every draw has six whole numbers in [0, L] that add up to total', () => {
+    for (const [total, L] of [[300, 100], [300, 60], [150, 100], [600, 100], [7, 3]]) {
+      for (const ys of draws(200, total, L)) {
+        expect(ys).toHaveLength(6);
+        expect(sum(ys)).toBe(total);
+        expect(ys.every((y) => Number.isInteger(y) && y >= 0 && y <= L)).toBe(true);
+      }
+    }
+  });
+
+  it('exact cases: L = total / 6 forces all equal; total 0 gives all zeros; L = total allows anything', () => {
+    for (const ys of draws(50, 300, 50)) expect(ys).toEqual([50, 50, 50, 50, 50, 50]);
+    for (const ys of draws(20, 0, 100)) expect(ys).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(countSplits(6, 300, 100)[6][300]).toBeGreaterThan(0);
+    expect(countSplits(2, 4, 4)[2][4]).toBe(5); // 0+4 1+3 2+2 3+1 4+0
+    expect(countSplits(2, 4, 2)[2][4]).toBe(1); // only 2+2
+  });
+
+  it('every valid split is equally likely: the first number follows N(5, 300 - v) / N(6, 300) (3000 draws)', () => {
+    const n = countSplits(6, 300, 100);
+    const ys = draws(3000).map((y) => y[0]);
+    // bins of 20 values: observed share vs exact share
+    for (let lo = 0; lo <= 80; lo += 20) {
+      let exact = 0;
+      for (let v = lo; v < lo + 20; v++) exact += n[5][300 - v] / n[6][300];
+      const seen = ys.filter((v) => v >= lo && v < lo + 20).length / ys.length;
+      expect(Math.abs(seen - exact)).toBeLessThan(0.08);
+    }
+    // the md's check: with L = 100, 50 is about 1.3 times as likely as 0 or 100 for the first number
+    expect(n[5][250] / n[5][300]).toBeCloseTo(n[5][250] / n[5][200], 6);
+    expect(n[5][250] / n[5][300]).toBeGreaterThan(1.2);
+    expect(n[5][250] / n[5][300]).toBeLessThan(1.4);
+  });
+
+  it('dealing keeps the numbers; averaged over shuffles each pair gets total / 6 and mixing w-hat is about 1/2 (600 draws)', () => {
+    const ms = Array.from({ length: 600 }, (_, i) => drawPairChances(i + 1, 300, 100).lock);
+    for (const m of ms) expect(sum(m)).toBe(300);
+    for (let k = 0; k < 6; k++) expect(Math.abs(ms.reduce((a, m) => a + m[k], 0) / ms.length / 50 - 1)).toBeLessThan(0.16); // within ±8 points of 50
+    const wHat = ms.reduce((a, m) => a + (m[3] + m[4] + m[5]) / 300, 0) / ms.length;
+    expect(Math.abs(wHat - 0.5)).toBeLessThan(0.08);
+    const ys = [10, 20, 30, 40, 100, 100];
+    expect([...deal(makeRng(3), ys)].sort((a, b) => a - b)).toEqual(ys);
+  });
+
+  it('drawn from the seed: the same seed gives the same matrices, lock and catalysis are drawn independently', () => {
+    expect(drawPairChances(42, 300, 100)).toEqual(drawPairChances(42, 300, 100));
+    expect(drawPairChances(42, 300, 100)).not.toEqual(drawPairChances(43, 300, 100));
+    const differ = Array.from({ length: 20 }, (_, i) => drawPairChances(i, 300, 100)).filter((m) => m.lock.join() !== m.catalysis.join());
+    expect(differ.length).toBe(20);
+  });
+
+  it('pairIndex maps every unordered size pair to its own slot in PAIR_ORDER', () => {
+    const names = ['c', 'o', 'h'];
+    for (const a of [0, 1, 2]) for (const b of [0, 1, 2]) {
+      expect(pairIndex(a, b)).toBe(pairIndex(b, a));
+      expect(PAIR_ORDER[pairIndex(a, b)]).toBe([names[Math.min(a, b)], names[Math.max(a, b)]].join(''));
+    }
+  });
+
+  it('chanceOf uses the drawn percentage of the pair and ignores chance and cross', () => {
+    const lock = [90, 0, 10, 60, 40, 100];
+    const cat = [5, 15, 25, 35, 45, 175];
+    for (const chance of ['graded', 'uniform', 'none'] as ChanceMode[]) {
+      for (const cross of [undefined, 0, 0.5, 1]) {
+        const c = { hier: true, eps: 0.05, seed: 1, chance, cross, pairChance: pc(lock, cat) };
+        for (const a of [0, 1, 2]) for (const b of [0, 1, 2]) {
+          expect(chanceOf(c, 'lock', a, b)).toBeCloseTo(lock[pairIndex(a, b)] / 100, 12);
+          expect(chanceOf(c, 'catalysis', a, b)).toBeCloseTo(cat[pairIndex(a, b)] / 100, 12);
+        }
+      }
+    }
+  });
+
+  const pairWorld = (pairChance: { lock: number[]; catalysis: number[] }) =>
+    createWorld({ hier: true, eps: 0.05, seed: 42, move: false, free: 40, herds: 2, lone: 6, pairChance, dyn: { lock: true, catalysis: true, similar: OFF } });
+
+  it('a pair at 100 always binds, a pair at 0 never does, and drawn-chance bonds are timed (no cross set)', () => {
+    const s = pairWorld(pc([100, 0, 0, 0, 0, 0]));
+    const [a, b] = meetPair(s, 0, PURPLE, GREEN, 0);
+    ticks(s, REVEAL);
+    expect(a.bond).toBe(b.id);
+    expect(a.bondUntil).toBeGreaterThan(0);
+    expect(timedBonds(s.config)).toBe(true);
+    const z = pairWorld(pc([0, 100, 100, 100, 100, 100]));
+    const [c, d] = meetPair(z, 0, PURPLE, GREEN, 0);
+    ticks(z, REVEAL);
+    expect(c.bond).toBe(-1);
+    expect(d.bond).toBe(-1);
+    expect(lockOn(z.config, 0)).toBe(false);
+  });
+
+  it('cells bind at about their drawn rate (300 encounters)', () => {
+    const s = pairWorld(pc([35, 50, 50, 50, 50, 65]));
+    const rate = successRate(s, 0, PURPLE, GREEN, 300, (a, b) => a.bond === b.id);
+    expect(Math.abs(rate - 0.35)).toBeLessThan(0.08);
+  });
+
+  it('config: pairs=draw is the default, drawn from the seed and recorded; pairs=rule keeps chance / cross; total and cap clamp', () => {
+    const c = testConfig('?seed=5');
+    expect(c.pairs).toBe('draw');
+    expect(c.pairChance).toEqual(drawPairChances(5, 300, 100));
+    expect(simConfigOf(c).pairChance).toEqual(c.pairChance);
+    expect(testConfig('?seed=5&pairs=rule').pairChance).toBeUndefined();
+    expect(simConfigOf(testConfig('?seed=5&pairs=rule')).pairChance).toBeUndefined();
+    expect(sum(testConfig('?seed=5&total=120').pairChance!.lock)).toBe(120);
+    expect(testConfig('?seed=5&cap=40').total).toBe(240); // 300 lowered to 6 x 40
+    expect(testConfig('?seed=5&cap=40&total=900').total).toBe(240);
+    expect(testConfig('?seed=5&cap=500').cap).toBe(100);
+    expect(testConfig('?seed=5&cap=40').pairChance!.catalysis.every((v) => v <= 40)).toBe(true);
+    // a header without pairChance (older logs) keeps the chance / cross rule
+    const { pairChance: _, ...legacy } = c;
+    expect(simConfigOf(legacy).pairChance).toBeUndefined();
+  });
 });

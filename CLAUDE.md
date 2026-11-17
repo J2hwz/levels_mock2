@@ -35,6 +35,7 @@ Everything participants do is logged, and the world is **deterministic**, so any
 | `chance` | skew: graded / uniform / no interactions |
 | `cross` | who interacts, w in [0, 1]: same size only (0) … every size pair (½) … different sizes only (1); drawn from the seed unless set |
 | `movement` | `random` walk (default) vs seed-drawn `laws` (sim: `laws`) |
+| `pairs` | `draw` (default): six chances per mechanism, adding up to `total`, each at most `cap`, drawn from the seed and dealt to the six size pairs (`src/sim/pairs.ts`); they replace `chance` and `cross` for the chances (sim: `pairChance`). `rule`: the `chance` / `cross` rule |
 
 Keep conditions comparable: a change meant for one condition must not silently alter another.
 

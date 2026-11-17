@@ -295,7 +295,8 @@ export async function runSandbox(root: HTMLElement, session: Session, cfg: Confi
     const row = (rule: 'lock' | 'catalysis', a: number) => SIZES[a].padEnd(18) + matrix(rule)[a].map((p) => p.toFixed(2).padStart(6)).join('');
     const lines = [`${head('lock')}    ${head('catalysis')}`];
     for (const a of [0, 1, 2]) lines.push(`${row('lock', a)}    ${row('catalysis', a)}`);
-    return `chance per encounter (chance=${cfg.chance}, cross w=${cfg.cross.toFixed(3)})\n${lines.join('\n')}\n`;
+    const how = cfg.pairChance ? `pairs=draw total=${cfg.total} cap=${cfg.cap}` : `chance=${cfg.chance}, cross w=${cfg.cross.toFixed(3)}`;
+    return `chance per encounter (${how})\n${lines.join('\n')}\n`;
   })();
   if (cfg.debug) {
     console.log(chanceText);

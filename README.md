@@ -51,8 +51,11 @@ download to the participant's own computer; nothing is sent anywhere.
 | `herds` | 0..12                     | `7`        | number of herds (hazes) at the start |
 | `lone`  | 0..40                     | `18`       | number of lone organisms (membranes) at the start |
 | `same`  | `0` \| `1`                | `0`        | `0`: same-colour cells never attract each other through the laws (same-colour repulsion and all other laws stay). `1`: the seed decides, as before |
-| `chance` | `graded` \| `uniform` \| `none` | `graded` | how likely lock & key and catalysis are per encounter. **condition (skew).** `graded`: the per-level tables `DYNAMICS.lockChance` / `catChance` (lock 90 / 50 / 10 %, catalysis 50 / 90 / 10 % for cells / organisms / herds). `uniform`: the mean of each table for every size and size pair (both 50 %). The chance of each size pair then follows `cross` (see "Size-pair chances"). `none`: 0 everywhere, no interactions at all, so composition is the only mechanism (also no pre-binding pull or bound-cell push). Laws and similarity are separate switches |
-| `cross` | 0..1                      | drawn from the seed | **condition (who interacts), w.** 0 = only same-size pairs interact (cell–cell, organism–organism, herd–herd); ½ = every size pair at its full chance; 1 = only different-size pairs (cell–organism, cell–herd, organism–herd). Without `cross=` each participant gets w drawn uniformly in [0, 1) from their seed (`crossFromSeed` in `src/config.ts`; `DEFAULTS.cross` can fix it for everyone). Recorded in the header as `cross`. See "Size-pair chances" |
+| `chance` | `graded` \| `uniform` \| `none` | `graded` | how likely lock & key and catalysis are per encounter. **condition (skew).** `graded`: the per-level tables `DYNAMICS.lockChance` / `catChance` (lock 90 / 50 / 10 %, catalysis 50 / 90 / 10 % for cells / organisms / herds). `uniform`: the mean of each table for every size and size pair (both 50 %). The chance of each size pair then follows `cross` (see "Size-pair chances"). `none`: 0 everywhere, no interactions at all, so composition is the only mechanism (also no pre-binding pull or bound-cell push). Laws and similarity are separate switches. Only used with `pairs=rule` |
+| `cross` | 0..1                      | drawn from the seed | **condition (who interacts), w.** 0 = only same-size pairs interact (cell–cell, organism–organism, herd–herd); ½ = every size pair at its full chance; 1 = only different-size pairs (cell–organism, cell–herd, organism–herd). Without `cross=` each participant gets w drawn uniformly in [0, 1) from their seed (`crossFromSeed` in `src/config.ts`; `DEFAULTS.cross` can fix it for everyone). Recorded in the header as `cross`. See "Size-pair chances". The chances use it only with `pairs=rule` |
+| `pairs` | `draw` \| `rule`        | `draw`     | **how size-pair chances are set.** `draw`: for lock & key and for catalysis separately, six numbers adding up to `total` are drawn from the seed and dealt to the six size pairs (see "Drawn size-pair chances"); they **replace** `chance` and `cross` for the chances. `rule`: the `chance` / `cross` rule ("Size-pair chances"). Recorded in the header as `pairChance` |
+| `total` | 0..6·`cap`                | `300`      | `pairs=draw`: what the six chances (in %) add up to; the mean chance per pair is `total` / 6 (300 → 50 %) |
+| `cap`   | 1..100                    | `100`      | `pairs=draw`: the largest allowed chance L for one pair, in %. `total` is lowered to at most 6 × `cap` |
 | `short` | `1`                       | off        | Explore phase lasts 60 s instead of 6 min |
 | `debug` | `1`                       | off        | HUD (the size-pair chance per encounter for lock & key and catalysis, also printed to the browser console; tick, hash, fps), entity labels, `S` = swap realisation, "skip ▸" phase button, `window.__sandbox` test hook |
 
@@ -60,7 +63,7 @@ All parsed in `src/config.ts` and echoed into the session header.
 
 ## Size-pair chances
 
-Lock & key and catalysis can happen between any two sizes. The chance that one encounter between a size-*i* and a
+Lock & key and catalysis can happen between any two sizes. With `pairs=rule`, the chance that one encounter between a size-*i* and a
 size-*j* thing fires is a 3 × 3 table built from two conditions, skew (`chance`) and who interacts (`cross` = w). An
 interactive version with sliders is at https://claude.ai/artifact/A2KuEiTpp9duhL6t6CSk7k. The code is `chanceOf` in
 `src/sim/world.ts`.
@@ -89,11 +92,37 @@ interactive version with sliders is at https://claude.ai/artifact/A2KuEiTpp9duhL
   ticks = 12 s).
   - A free pair rolls again only after moving apart.
   - Two parts of the same whole roll only once while they share it.
+- **With `pairs=draw` (the default)** this rule is replaced by the drawn tables (see "Drawn size-pair chances"); use
+  `pairs=rule` to get it.
 - **Logs recorded before `cross` existed** have none in their header. They replay with the old behaviour: same size
   only, permanent bonds.
 
 These are chances per encounter, not interaction counts. Cells meet each other far more often than anything meets a
 herd, so what participants see also depends on how often each pair meets.
+
+## Drawn size-pair chances
+
+With `pairs=draw` (the default) each participant gets their own two 3 × 3 chance tables, drawn from their seed. The
+code is `src/sim/pairs.ts`; `chanceOf` returns the drawn number / 100 and ignores `chance` and `cross`.
+
+1. **Draw six numbers that add up to `total`** (each a whole number from 0 to L = `cap`). N(k, s) counts the ways to
+   split s into k such numbers: N(0, s) = 1 if s = 0 else 0, N(k, s) = Σ_{v=0}^{min(L, s)} N(k−1, s−v). The numbers are
+   drawn one at a time. Before step k there is R_k left (R_1 = `total`) and m = 6 − k numbers still to come:
+   `P(y_k = v) = N(m, R_k − v) / N(m+1, R_k)` for max(0, R_k − L·m) ≤ v ≤ min(L, R_k). The sixth is what is left. So every
+   way of splitting `total` into six numbers in [0, L] is equally likely, with nothing thrown away.
+2. **Deal them to the six pairs** by a random ordering: `x = (cc, oo, hh, co, ch, oh)` (cell–cell, organism–organism,
+   herd–herd, cell–organism, cell–herd, organism–herd). Each different-size pair is one number, used in both directions.
+
+- Lock & key and catalysis are drawn **independently** (their own six numbers and their own ordering).
+- The draws use their own seeded stream (seed + a fixed salt), so the same seed always gives the same tables, and the
+  world's random stream is unaffected.
+- The six numbers are stored in the header as `pairChance: { lock: [...], catalysis: [...] }` (whole percentages in the
+  order above), and replay uses exactly those.
+- The `lock` / `catalysis` switches still turn a mechanism off; a pair at 0 never fires.
+- Bonds still let go after 12 s, and different sizes still interact only between free-standing things.
+- Averaged over participants, the raw share between different sizes ŵ = (x_co + x_ch + x_oh) / `total` is ½. Over 2000
+  seeds at the defaults it was 0.50 (range 0.14–0.90).
+- `cross` is still drawn and recorded with `pairs=draw`, but it does not affect the chances.
 
 ## Tuning the interactions
 
@@ -334,7 +363,7 @@ Task logs have the same event types, plus `task_success {task, tick, tiers}`, `t
   "header": {
     "app": "levels-sandbox", "version": "0.0.1", "git_hash": "7c6c013",
     "started_at": "2026-10-19T05:05:46.123Z", "seed": 42,
-    "config": { "hier": true, "composition": true, "movement": "random", "chance": "graded", "cross": 0.37, "skin": "biology", "seed": 42, "eps": 0.05, "short": false, "debug": false, "exploreMs": 360000, "seedFromUrl": true },
+    "config": { "hier": true, "composition": true, "movement": "random", "chance": "graded", "cross": 0.37, "pairs": "draw", "total": 300, "cap": 100, "pairChance": { "lock": [44, 45, 41, 66, 43, 61], "catalysis": [23, 71, 31, 90, 50, 35] }, "skin": "biology", "seed": 42, "eps": 0.05, "short": false, "debug": false, "exploreMs": 360000, "seedFromUrl": true },
     "user_agent": "...", "screen": { "width": 1920, "height": 1080, "dpr": 1, "viewport_w": 1400, "viewport_h": 900 }
   },
   "events": [ { "t_tick": 0, "t_ms": 0.1, "type": "session_start", "payload": { "hash": "..." } }, ... ]
